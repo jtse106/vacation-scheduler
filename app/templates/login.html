@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="centered-shell">
+  <section class="auth-card card">
+    <h1>Log in</h1>
+    <p class="subtle">Use your physician or admin credentials to access the scheduler.</p>
+    <form method="post" class="stack">
+      <label>
+        <span>Username</span>
+        <input type="text" name="username" required />
+      </label>
+      <label>
+        <span>Password</span>
+        <input type="password" name="password" required />
+      </label>
+      <button class="primary-button" type="submit">Log in</button>
+    </form>
+  </section>
+</main>
+{% endblock %}

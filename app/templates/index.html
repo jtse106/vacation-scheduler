@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+
+  <section class="calendar-shell card">
+    <div class="calendar-header">
+      <div class="calendar-nav">
+        <button id="prevMonth" class="icon-button" type="button">‹</button>
+        <button id="nextMonth" class="icon-button" type="button">›</button>
+        <button id="todayButton" class="secondary-button today-pill" type="button">Today</button>
+      </div>
+      <div class="calendar-title-wrap">
+        <h1 id="calendarTitle">{{ month_name }} {{ current_year }}</h1>
+      </div>
+    </div>
+    <div id="calendarMount"
+      data-year="{{ current_year }}"
+      data-month="{{ current_month }}"
+      data-week-start="{{ week_start }}"
+      data-show-week-numbers="{{ 'true' if show_week_numbers else 'false' }}"
+      data-max-slots="{{ max_slots }}">
+    </div>
+  </section>
+</main>
+
+<div id="requestModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Request Vacation</h2>
+      <button class="icon-button modal-close" data-close-modal="requestModal" type="button">✕</button>
+    </div>
+    <form id="requestForm" class="stack">
+      <label>
+        <span>Start date</span>
+        <input name="start_date" type="date" required />
+      </label>
+      <label>
+        <span>End date</span>
+        <input name="end_date" type="date" required />
+      </label>
+      <label>
+        <span>Optional note</span>
+        <textarea name="request_note" rows="3" placeholder="Coverage notes or comments"></textarea>
+      </label>
+      <button class="primary-button" type="submit">Confirm Request</button>
+      {% if not nav_user %}
+        <p class="subtle">Log in to submit requests.</p>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+<div id="dayModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-card day-modal-card">
+    <div class="modal-header">
+      <h2 id="dayModalTitle">Day details</h2>
+      <button class="icon-button modal-close" data-close-modal="dayModal" type="button">✕</button>
+    </div>
+    <div id="dayModalContent" class="stack"></div>
+  </div>
+</div>
+{% endblock %}

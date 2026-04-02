@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell card history-page elevated-page">
+      <div class="page-top">
+        <a class="back-link" href="{{ url_for('index') }}"><span>‹</span><span>Back</span></a>
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">History</span>
+            <h1>Request History</h1>
+            <p class="subtle">Your requests in reverse chronological order.</p>
+          </div>
+        </div>
+      </div>
+      <div class="content-section">
+        <div id="historyList" class="history-list"></div>
+      </div>
+    </div>
+  </section>
+</main>
+{% endblock %}

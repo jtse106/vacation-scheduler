@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell card elevated-page">
+      <div class="page-top">
+        <a class="back-link" href="{{ url_for('index') }}"><span>‹</span><span>Back</span></a>
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">Policy</span>
+            <h1>Vacation Guidelines</h1>
+            <p class="subtle">Department vacation request rules and Spring Break policy.</p>
+          </div>
+        </div>
+      </div>
+      <div class="content-section">
+        <div class="guidelines">
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h2>Vacation Request Guidelines</h2>
+            <p>Vacation requests may be submitted up to 1 year in advance and are processed on a first-come, first-served basis.</p>
+            <p>Up to 6 physicians may be scheduled off on any given day. Additional requests will be placed on a waitlist.</p>
+            <p>If a physician in one of the top 6 slots cancels their vacation, the remaining physicians will move up the waitlist accordingly.</p>
+          </section>
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h2>Spring Break Guidelines</h2>
+            <p>Spring Break is defined as the last week of March through the first 2 weeks of April.</p>
+            <p>Physicians who have Spring Break off during the current year must wait until November 1 to submit requests for Spring Break of the following year.</p>
+            <p>All other physicians may submit Spring Break vacation requests up to 1 year in advance, as usual.</p>
+          </section>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+{% endblock %}

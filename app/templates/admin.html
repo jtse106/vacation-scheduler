@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell">
+      <div class="page-top admin-page-top">
+        <a class="back-link" href="{{ url_for('index') }}"><span>‹</span><span>Back</span></a>
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">Administration</span>
+            <h1>Admin Area</h1>
+            <p class="subtle">Manage requests and physician accounts from one control center.</p>
+          </div>
+        </div>
+        <div class="admin-toggle-bar">
+          <button class="secondary-button admin-toggle-button active" type="button" data-admin-panel-button="requests">Admin Requests</button>
+          <button class="secondary-button admin-toggle-button" type="button" data-admin-panel-button="users">User Management</button>
+        </div>
+      </div>
+      <div class="admin-stack content-section">
+        <section class="card admin-panel active admin-surface" data-admin-panel="requests">
+          <div class="page-header">
+            <div>
+              <h1>Admin Requests</h1>
+              <p class="subtle">Approve or mark requests unavailable.</p>
+            </div>
+          </div>
+          <div id="adminRequests" class="history-list"></div>
+        </section>
+        <section class="card admin-panel admin-surface" data-admin-panel="users">
+          <div class="page-header">
+            <div>
+              <h1>User Management</h1>
+              <p class="subtle">Add, disable, or reactivate physicians and admins.</p>
+            </div>
+          </div>
+          <form id="userCreateForm" class="stack compact-form">
+            <label><span>Full name</span><input type="text" name="full_name" required /></label>
+            <label><span>Username</span><input type="text" name="username" required /></label>
+            <label><span>Email</span><input type="email" name="email" required /></label>
+            <label><span>Password</span><input type="password" name="password" required /></label>
+            <label>
+              <span>Role</span>
+              <select name="role">
+                <option value="physician">Physician</option>
+                <option value="admin">Admin</option>
+              </select>
+            </label>
+            <button class="primary-button" type="submit">Add user</button>
+          </form>
+          <div id="adminUsers" class="history-list"></div>
+        </section>
+      </div>
+    </div>
+  </section>
+</main>
+{% endblock %}

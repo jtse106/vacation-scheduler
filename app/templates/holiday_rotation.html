@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell card elevated-page">
+      <div class="page-top">
+        <a class="back-link" href="{{ url_for('index') }}"><span>‹</span><span>Back</span></a>
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">Resources</span>
+            <h1>Holiday Rotation</h1>
+            <p class="subtle">Year-by-year holiday pairings showing which physicians are off for each holiday.</p>
+          </div>
+        </div>
+      </div>
+      <div class="content-section">
+        <div class="year-toggle-row">
+          {% for year in rotation_years %}
+            <a
+              class="secondary-button year-toggle-button {% if year == selected_year %}active{% endif %}"
+              href="{{ url_for('holiday_rotation', year=year) }}">
+              {{ year }}
+            </a>
+          {% endfor %}
+        </div>
+        <div class="rotation-grid">
+          {% for pairing in rotation_pairings %}
+            <section class="rotation-column">
+              <div class="rotation-column-header">
+                <span class="doc-badge">Off Pairing</span>
+                <h2>{{ pairing.title }}</h2>
+              </div>
+              <div class="rotation-list">
+                {% for physician in pairing.physicians %}
+                  <article class="rotation-person">
+                    <div class="rotation-line">
+                      <span class="rotation-name">{{ physician.name }}</span>
+                      <span class="rotation-note">{% if physician.note %}Swap: {{ physician.note }}{% endif %}</span>
+                    </div>
+                  </article>
+                {% endfor %}
+              </div>
+            </section>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+{% endblock %}
