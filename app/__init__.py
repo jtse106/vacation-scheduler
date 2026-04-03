@@ -1,5 +1,6 @@
 import os
 
+from dotenv import load_dotenv
 from flask import Flask
 
 from .db import ensure_seed_data, init_db
@@ -7,6 +8,8 @@ from .routes import register_routes
 
 
 def create_app() -> Flask:
+    load_dotenv()
+
     app = Flask(__name__, instance_relative_config=False)
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-vacation-scheduler-secret"),
@@ -16,7 +19,10 @@ def create_app() -> Flask:
         SMTP_PORT=int(os.environ.get("SMTP_PORT", 587)),
         SMTP_USERNAME=os.environ.get("SMTP_USERNAME", ""),
         SMTP_PASSWORD=os.environ.get("SMTP_PASSWORD", ""),
-        SMTP_FROM=os.environ.get("SMTP_FROM", "Vacation Scheduler <no-reply@example.com>"),
+        SMTP_FROM=os.environ.get("SMTP_FROM", "gmittendorf+VLCalendar@gmail.com"),
+        ZEN_API_KEY=os.environ.get("ZEN_API_KEY", os.environ.get("zen_api_key", "")),
+        ZEN_API_URL=os.environ.get("ZEN_API_URL", "https://gateway.theturbo.ai/v1/chat/completions"),
+        ZEN_MODEL=os.environ.get("ZEN_MODEL", "gpt-4o-mini"),
     )
 
     init_db(app)

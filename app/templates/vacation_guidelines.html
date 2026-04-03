@@ -3,34 +3,38 @@
 <main class="layout">
   {% include "_sidebar.html" %}
   <section class="content-pane">
-    <div class="page-shell card elevated-page">
-      <div class="page-top">
-        <a class="back-link" href="{{ url_for('index') }}"><span>‹</span><span>Back</span></a>
+    <div class="page-shell stack">
+      <section class="card page-panel">
         <div class="page-header">
           <div>
             <span class="page-kicker">Policy</span>
-            <h1>Vacation Guidelines</h1>
-            <p class="subtle">Department vacation request rules and Spring Break policy.</p>
+            <h1>Vacation guidelines</h1>
+            <p class="subtle">Use these local rules together with the protected holiday schedule.</p>
           </div>
         </div>
-      </div>
-      <div class="content-section">
-        <div class="guidelines">
-          <section class="guideline-section">
-            <span class="guideline-accent"></span>
-            <h2>Vacation Request Guidelines</h2>
-            <p>Vacation requests may be submitted up to 1 year in advance and are processed on a first-come, first-served basis.</p>
-            <p>Up to 6 physicians may be scheduled off on any given day. Additional requests will be placed on a waitlist.</p>
-            <p>If a physician in one of the top 6 slots cancels their vacation, the remaining physicians will move up the waitlist accordingly.</p>
-          </section>
-          <section class="guideline-section">
-            <span class="guideline-accent"></span>
-            <h2>Spring Break Guidelines</h2>
-            <p>Spring Break is defined as the last week of March through the first 2 weeks of April.</p>
-            <p>Physicians who have Spring Break off during the current year must wait until November 1 to submit requests for Spring Break of the following year.</p>
-            <p>All other physicians may submit Spring Break vacation requests up to 1 year in advance, as usual.</p>
-          </section>
-        </div>
+      </section>
+
+      <div class="guidelines">
+        <section class="guideline-section">
+          <span class="guideline-accent"></span>
+          <h2>Guaranteed VL slots</h2>
+          <p>Vacation is scheduled immediately when open slots exist. The calendar is not a waitlist and does not book over protected holiday dates.</p>
+        </section>
+        <section class="guideline-section">
+          <span class="guideline-accent"></span>
+          <h2>Holiday protections</h2>
+          <p>Thanksgiving, Christmas, New Year's, Memorial Day, July 4th, and Labor Day are protected by default. Administrators can adjust the exact date ranges as needed.</p>
+        </section>
+        <section class="guideline-section">
+          <span class="guideline-accent"></span>
+          <h2>Delegation</h2>
+          <p>Each physician may update only their own schedule unless another physician explicitly grants delegation in the Request History page.</p>
+        </section>
+        <section class="guideline-section">
+          <span class="guideline-accent"></span>
+          <h2>Holiday trades</h2>
+          <p>Holiday assignments may be traded only after the receiving physician accepts the offer. Major holidays trade with major holidays, and minor holidays trade with minor holidays.</p>
+        </section>
       </div>
     </div>
   </section>

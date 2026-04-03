@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell stack">
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">How To Use It</span>
+            <h1>Instructions</h1>
+            <p class="subtle">Quick guidance for physicians and administrators.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <h2>For physicians</h2>
+          </div>
+        </div>
+        <div class="guidelines">
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h3>Schedule vacation</h3>
+            <p>Use the Schedule Vacation button in the sidebar or homepage hero. Pick your dates manually, or describe the request in plain language and let the assistant translate it.</p>
+          </section>
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h3>Understand blocked dates</h3>
+            <p>Protected holidays appear directly on the calendar. Those dates remain blank and cannot be booked for VL.</p>
+          </section>
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h3>Use delegation when needed</h3>
+            <p>On Request History, you can authorize another physician to manage your schedule. Incoming delegations also appear there so you can see whose calendar you may edit.</p>
+          </section>
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h3>Trade holiday assignments</h3>
+            <p>On Request History, choose the year, select your holiday, select the other physician, and offer a same-category trade. The schedule updates after the invited physician accepts.</p>
+          </section>
+        </div>
+      </section>
+
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <h2>For administrators</h2>
+          </div>
+        </div>
+        <div class="guidelines">
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h3>Create users and notify them</h3>
+            <p>The Admin Console lets you create physicians and admins, set annual VL limits, and email account details automatically when SMTP is configured.</p>
+          </section>
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h3>Control protected holidays</h3>
+            <p>Use the Holidays panel to adjust major and minor holiday ranges when local rules differ from the generated defaults.</p>
+          </section>
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h3>Review every change</h3>
+            <p>The admin logs include a high-level activity log and a field-by-field change log so you can trace exactly what changed, by whom, and when.</p>
+          </section>
+          <section class="guideline-section">
+            <span class="guideline-accent"></span>
+            <h3>Export the annual table</h3>
+            <p>Use the Export tab to produce the physician-by-date VL matrix and download it as CSV.</p>
+          </section>
+        </div>
+      </section>
+
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <h2>Screenshots</h2>
+            <p class="subtle">These are generated from the app with Playwright during validation.</p>
+          </div>
+        </div>
+        <div class="screenshot-grid">
+          <figure class="screenshot-card">
+            <img src="{{ url_for('static', filename='screenshots/home.png') }}" alt="Homepage calendar screenshot" />
+            <figcaption>Homepage live schedule</figcaption>
+          </figure>
+          <figure class="screenshot-card">
+            <img src="{{ url_for('static', filename='screenshots/admin.png') }}" alt="Admin console screenshot" />
+            <figcaption>Admin console</figcaption>
+          </figure>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+{% endblock %}

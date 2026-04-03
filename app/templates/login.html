@@ -2,8 +2,9 @@
 {% block body %}
 <main class="centered-shell">
   <section class="auth-card card">
+    <span class="page-kicker">Sign In</span>
     <h1>Log in</h1>
-    <p class="subtle">Use your physician or admin credentials to access the scheduler.</p>
+    <p class="subtle">Use your physician or admin credentials to manage the shared vacation schedule.</p>
     <form method="post" class="stack">
       <label>
         <span>Username</span>
@@ -15,6 +16,7 @@
       </label>
       <button class="primary-button" type="submit">Log in</button>
     </form>
+    <p class="subtle top-gap"><a href="{{ url_for('forgot_password') }}">Forgot your password?</a></p>
   </section>
 </main>
 {% endblock %}

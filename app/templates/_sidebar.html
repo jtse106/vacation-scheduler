@@ -1,28 +1,31 @@
 <aside class="sidebar">
   <button id="openRequestModal" class="primary-button large-button request-button" type="button">
-    <span class="button-plus">+</span>
-    <span>Request Vacation</span>
+    <span>Schedule Vacation</span>
   </button>
+
   <div class="mini-calendar card">
     <div class="mini-calendar-header">
       <div class="mini-calendar-nav-group">
-        <button id="miniPrevYear" class="icon-button mini-nav-button" type="button">«</button>
-        <button id="miniPrev" class="icon-button mini-nav-button" type="button">‹</button>
+        <button id="miniPrevYear" class="icon-button mini-nav-button" type="button"><<</button>
+        <button id="miniPrev" class="icon-button mini-nav-button" type="button"><</button>
       </div>
       <div id="miniCalendarLabel"></div>
       <div class="mini-calendar-nav-group">
-        <button id="miniNext" class="icon-button mini-nav-button" type="button">›</button>
-        <button id="miniNextYear" class="icon-button mini-nav-button" type="button">»</button>
+        <button id="miniNext" class="icon-button mini-nav-button" type="button">></button>
+        <button id="miniNextYear" class="icon-button mini-nav-button" type="button">>></button>
       </div>
     </div>
     <div id="miniCalendarGrid"></div>
   </div>
+
   <nav class="sidebar-links card">
-    <a class="{% if request.endpoint == 'history' %}active{% endif %}" href="{{ url_for('history') }}"><span class="nav-icon">≡</span><span>Request History</span></a>
-    <a class="{% if request.endpoint == 'holiday_rotation' %}active{% endif %}" href="{{ url_for('holiday_rotation') }}"><span class="nav-icon">◧</span><span>Holiday Rotation</span></a>
-    <a class="{% if request.endpoint == 'vacation_guidelines' %}active{% endif %}" href="{{ url_for('vacation_guidelines') }}"><span class="nav-icon">●</span><span>Vacation Guidelines</span></a>
+    <a class="{% if request.endpoint == 'history' %}active{% endif %}" href="{{ url_for('history') }}">Request History</a>
+    <a class="{% if request.endpoint == 'holiday_rotation' %}active{% endif %}" href="{{ url_for('holiday_rotation') }}">Holiday Rotation</a>
+    <a class="{% if request.endpoint == 'legacy_calendars' %}active{% endif %}" href="{{ url_for('legacy_calendars') }}">Legacy Calendars</a>
+    <a class="{% if request.endpoint == 'instructions' %}active{% endif %}" href="{{ url_for('instructions') }}">Instructions</a>
+    <a class="{% if request.endpoint == 'vacation_guidelines' %}active{% endif %}" href="{{ url_for('vacation_guidelines') }}">Guidelines</a>
     {% if nav_user and nav_user.role == 'admin' %}
-      <a class="{% if request.endpoint == 'admin' %}active{% endif %}" href="{{ url_for('admin') }}"><span class="nav-icon">⚑</span><span>Admin Area</span></a>
+      <a class="{% if request.endpoint == 'admin' %}active{% endif %}" href="{{ url_for('admin') }}">Admin Console</a>
     {% endif %}
   </nav>
 </aside>

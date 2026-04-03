@@ -1,96 +1,194 @@
+import csv
 import re
-import zipfile
+import sqlite3
+from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
-from xml.etree import ElementTree as ET
+
+from .excel_import import normalize_name
 
 
-NAMESPACE = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
-PAIRING_TITLES = [
-    "Thanksgiving and Memorial Day",
-    "Christmas and July 4th",
-    "New Years and Labor Day",
-]
+SEED_PATH = Path("legacy VL Calendar/Holiday Rotation Schedule - Holiday_Rotation_Schedule.csv")
+
+PAIRING_TO_HOLIDAYS = {
+    "Thanksgiving and Memorial Day": (
+        {"key": "thanksgiving", "title": "Thanksgiving", "category": "major"},
+        {"key": "memorial_day", "title": "Memorial Day", "category": "minor"},
+    ),
+    "Christmas and July 4th": (
+        {"key": "christmas", "title": "Christmas", "category": "major"},
+        {"key": "july_4", "title": "July 4th", "category": "minor"},
+    ),
+    "New Years and Labor Day": (
+        {"key": "new_years", "title": "New Year's", "category": "major"},
+        {"key": "labor_day", "title": "Labor Day", "category": "minor"},
+    ),
+}
+
+MAJOR_ROTATION = ["thanksgiving", "christmas", "new_years"]
+MINOR_ROTATION = ["memorial_day", "july_4", "labor_day"]
 
 
-def split_entry(value: str):
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds")
+
+
+def _split_entry(value: str):
     text = (value or "").strip()
     if not text:
         return None
     match = re.match(r"^(.*?)\s*\((.*?)\)\s*$", text)
     if match:
         return {"name": match.group(1).strip(), "note": match.group(2).strip()}
+    alt_match = re.match(r"^(.*?)(?:\s+(July 4th|July 4|Mem|Mem Day|MD|LD|J4))$", text, re.IGNORECASE)
+    if alt_match:
+        return {"name": alt_match.group(1).strip(), "note": alt_match.group(2).strip()}
     return {"name": text, "note": ""}
 
 
-def workbook_cells(path: Path):
-    with zipfile.ZipFile(path) as archive:
-        shared = []
-        shared_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
-        for item in shared_root.iter(f"{NAMESPACE}si"):
-            shared.append("".join(node.text or "" for node in item.iter(f"{NAMESPACE}t")))
-
-        worksheet = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
-        cells = {}
-        max_row = 0
-        for row in worksheet.find(f"{NAMESPACE}sheetData"):
-            max_row = max(max_row, int(row.attrib["r"]))
-            for cell in row:
-                reference = cell.attrib["r"]
-                cell_type = cell.attrib.get("t")
-                value_node = cell.find(f"{NAMESPACE}v")
-                value = "" if value_node is None else value_node.text or ""
-                if cell_type == "s" and value:
-                    value = shared[int(value)]
-                cells[reference] = value
-        return cells, max_row
+def _normalized_lookup_key(full_name: str) -> str:
+    normalized = normalize_name(full_name) or full_name.strip()
+    return re.sub(r"\s+", "", normalized).lower()
 
 
-def parse_holiday_rotation(path: Path):
-    cells, max_row = workbook_cells(path)
+def parse_rotation_seed(path: Path | None = None):
+    rotation_path = path or SEED_PATH
+    with rotation_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle))
 
-    years = []
-    column_letters = []
-    for column in "BCDEFGHIJKLMNOPQRSTUVWXYZ":
-        value = (cells.get(f"{column}1", "") or "").strip()
-        if value:
-            try:
-                year = str(int(float(value)))
-            except ValueError:
+    if not rows:
+        return {"years": [], "assignments_by_year": {}}
+
+    year_columns = []
+    for index, value in enumerate(rows[0][1:], start=1):
+        text = (value or "").strip()
+        if text.isdigit():
+            year_columns.append((index, int(text)))
+
+    assignments_by_year = {year: defaultdict(list) for _, year in year_columns}
+    current_section = None
+    slot_counter = 0
+
+    for row in rows[1:]:
+        title = (row[0] if row else "").strip()
+        if title in PAIRING_TO_HOLIDAYS:
+            current_section = title
+            slot_counter = 0
+        if not current_section:
+            continue
+
+        row_has_entries = False
+        for column_index, year in year_columns:
+            raw_value = row[column_index] if column_index < len(row) else ""
+            parsed = _split_entry(raw_value)
+            if not parsed:
                 continue
-            years.append(year)
-            column_letters.append(column)
+            row_has_entries = True
+            normalized_name = normalize_name(parsed["name"]) or parsed["name"].strip()
+            for holiday in PAIRING_TO_HOLIDAYS[current_section]:
+                assignments_by_year[year][holiday["key"]].append(
+                    {
+                        "holiday_key": holiday["key"],
+                        "holiday_title": holiday["title"],
+                        "category": holiday["category"],
+                        "full_name": normalized_name,
+                        "slot_order": slot_counter + 1,
+                        "note": parsed["note"],
+                    }
+                )
+        if row_has_entries:
+            slot_counter += 1
 
-    sections = []
-    for row_number in range(1, max_row + 1):
-        title = (cells.get(f"A{row_number}", "") or "").strip()
-        if title in PAIRING_TITLES:
-            sections.append((title, row_number))
+    return {
+        "years": sorted(assignments_by_year),
+        "assignments_by_year": {year: dict(assignments) for year, assignments in assignments_by_year.items()},
+    }
 
-    sections_with_end = []
-    for index, (title, start_row) in enumerate(sections):
-        end_row = sections[index + 1][1] - 1 if index + 1 < len(sections) else max_row
-        sections_with_end.append((title, start_row, end_row))
 
-    years_map = {}
-    for year, column in zip(years, column_letters):
-        pairings = []
-        for title, start_row, end_row in sections_with_end:
-            physicians = []
-            for row_number in range(start_row, end_row + 1):
-                if row_number == start_row:
-                    value = cells.get(f"{column}{row_number}", "")
-                else:
-                    value = cells.get(f"{column}{row_number}", "")
-                parsed = split_entry(value)
-                if parsed:
-                    physicians.append(parsed)
-            pairings.append({"title": title, "physicians": physicians})
-        years_map[year] = pairings
+def seed_rotation_assignments(connection: sqlite3.Connection, user_lookup: dict[str, int], path: Path | None = None):
+    parsed = parse_rotation_seed(path)
+    for year, assignments in parsed["assignments_by_year"].items():
+        for holiday_key, rows in assignments.items():
+            for row in rows:
+                user_id = user_lookup.get(_normalized_lookup_key(row["full_name"]))
+                if not user_id:
+                    continue
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO holiday_rotation_assignments
+                    (year, holiday_key, holiday_title, category, user_id, slot_order, note, source_type, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'legacy-seed', ?, ?)
+                    """,
+                    (
+                        year,
+                        holiday_key,
+                        row["holiday_title"],
+                        row["category"],
+                        user_id,
+                        row["slot_order"],
+                        row["note"],
+                        _now_iso(),
+                        _now_iso(),
+                    ),
+                )
 
-    current_year = (cells.get("A2", "") or "").strip()
-    if current_year and current_year not in years_map and years:
-        current_year = years[-1]
-    elif not current_year and years:
-        current_year = years[-1]
 
-    return {"years": years, "current_year": current_year, "pairings_by_year": years_map}
+def _next_holiday_key(category: str, holiday_key: str) -> str:
+    rotation = MAJOR_ROTATION if category == "major" else MINOR_ROTATION
+    index = rotation.index(holiday_key)
+    return rotation[(index + 1) % len(rotation)]
+
+
+def ensure_future_rotation_years(connection: sqlite3.Connection, through_year: int):
+    row = connection.execute("SELECT MAX(year) AS max_year FROM holiday_rotation_assignments").fetchone()
+    max_year = row["max_year"] if row and row["max_year"] is not None else None
+    if max_year is None:
+        return
+
+    while max_year < through_year:
+        source_rows = connection.execute(
+            """
+            SELECT year, holiday_key, holiday_title, category, user_id, slot_order, note
+            FROM holiday_rotation_assignments
+            WHERE year = ?
+            ORDER BY category ASC, holiday_key ASC, slot_order ASC
+            """,
+            (max_year,),
+        ).fetchall()
+        if not source_rows:
+            break
+
+        next_year = max_year + 1
+        created_any = False
+        for source_row in source_rows:
+            next_key = _next_holiday_key(source_row["category"], source_row["holiday_key"])
+            title = {
+                "thanksgiving": "Thanksgiving",
+                "christmas": "Christmas",
+                "new_years": "New Year's",
+                "memorial_day": "Memorial Day",
+                "july_4": "July 4th",
+                "labor_day": "Labor Day",
+            }[next_key]
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO holiday_rotation_assignments
+                (year, holiday_key, holiday_title, category, user_id, slot_order, note, source_type, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'auto-rotation', ?, ?)
+                """,
+                (
+                    next_year,
+                    next_key,
+                    title,
+                    source_row["category"],
+                    source_row["user_id"],
+                    source_row["slot_order"],
+                    source_row["note"],
+                    _now_iso(),
+                    _now_iso(),
+                ),
+            )
+            created_any = True
+        if not created_any:
+            break
+        max_year = next_year

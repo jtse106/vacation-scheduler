@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell stack">
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">Archive</span>
+            <h1>Legacy VL calendars</h1>
+            <p class="subtle">Browse historical schedules alongside the live application.</p>
+          </div>
+        </div>
+        <div class="year-toggle-row">
+          {% for year in legacy_years %}
+            <a class="secondary-button year-toggle-button {% if year == selected_year %}active{% endif %}" href="{{ url_for('legacy_calendars', year=year) }}">{{ year }}</a>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <h2>{{ calendar_data.title if calendar_data else 'No calendar selected' }}</h2>
+            <p class="subtle">Raw imported sheet for reference.</p>
+          </div>
+        </div>
+        {% if calendar_data %}
+          <div class="legacy-table-wrap">
+            <table class="legacy-table">
+              <tbody>
+                {% for row in calendar_data.rows %}
+                  <tr>
+                    {% for cell in row %}
+                      <td>{{ cell }}</td>
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="empty-state">No legacy calendar data was found.</p>
+        {% endif %}
+      </section>
+
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <h2>Downloads</h2>
+            <p class="subtle">Original CSV references from the legacy folder.</p>
+          </div>
+        </div>
+        <div class="history-list">
+          {% for document in legacy_documents %}
+            <article class="document-row">
+              <div>
+                <strong>{{ document.title }}</strong>
+                <div class="subtle">{{ document.file_name }}</div>
+              </div>
+              <a class="secondary-button" href="{{ url_for('download_legacy_document', file_name=document.file_name) }}">Download</a>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+{% endblock %}

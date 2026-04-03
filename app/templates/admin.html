@@ -3,55 +3,137 @@
 <main class="layout">
   {% include "_sidebar.html" %}
   <section class="content-pane">
-    <div class="page-shell">
-      <div class="page-top admin-page-top">
-        <a class="back-link" href="{{ url_for('index') }}"><span>‹</span><span>Back</span></a>
+    <div class="page-shell stack">
+      <section class="card page-panel">
         <div class="page-header">
           <div>
             <span class="page-kicker">Administration</span>
-            <h1>Admin Area</h1>
-            <p class="subtle">Manage requests and physician accounts from one control center.</p>
+            <h1>Admin console</h1>
+            <p class="subtle">Manage users, holidays, logs, and year-specific VL exports.</p>
           </div>
         </div>
         <div class="admin-toggle-bar">
-          <button class="secondary-button admin-toggle-button active" type="button" data-admin-panel-button="requests">Admin Requests</button>
-          <button class="secondary-button admin-toggle-button" type="button" data-admin-panel-button="users">User Management</button>
+          <button class="secondary-button admin-toggle-button active" type="button" data-admin-panel-button="schedule">Schedule</button>
+          <button class="secondary-button admin-toggle-button" type="button" data-admin-panel-button="users">Users</button>
+          <button class="secondary-button admin-toggle-button" type="button" data-admin-panel-button="holidays">Holidays</button>
+          <button class="secondary-button admin-toggle-button" type="button" data-admin-panel-button="logs">Logs</button>
+          <button class="secondary-button admin-toggle-button" type="button" data-admin-panel-button="export">Export</button>
         </div>
-      </div>
-      <div class="admin-stack content-section">
-        <section class="card admin-panel active admin-surface" data-admin-panel="requests">
-          <div class="page-header">
-            <div>
-              <h1>Admin Requests</h1>
-              <p class="subtle">Approve or mark requests unavailable.</p>
-            </div>
+      </section>
+
+      <section class="card admin-panel active" data-admin-panel="schedule">
+        <div class="page-header">
+          <div>
+            <h2>All scheduled vacation</h2>
+            <p class="subtle">Use the global request modal to add new entries for any physician.</p>
           </div>
-          <div id="adminRequests" class="history-list"></div>
-        </section>
-        <section class="card admin-panel admin-surface" data-admin-panel="users">
-          <div class="page-header">
-            <div>
-              <h1>User Management</h1>
-              <p class="subtle">Add, disable, or reactivate physicians and admins.</p>
-            </div>
+        </div>
+        <div id="adminRequests" class="history-list"></div>
+        <div class="page-header top-gap">
+          <div>
+            <h2>Holiday trades</h2>
+            <p class="subtle">See accepted, pending, and rejected trade requests.</p>
           </div>
-          <form id="userCreateForm" class="stack compact-form">
-            <label><span>Full name</span><input type="text" name="full_name" required /></label>
-            <label><span>Username</span><input type="text" name="username" required /></label>
-            <label><span>Email</span><input type="email" name="email" required /></label>
-            <label><span>Password</span><input type="password" name="password" required /></label>
-            <label>
-              <span>Role</span>
-              <select name="role">
-                <option value="physician">Physician</option>
-                <option value="admin">Admin</option>
-              </select>
-            </label>
-            <button class="primary-button" type="submit">Add user</button>
-          </form>
-          <div id="adminUsers" class="history-list"></div>
-        </section>
-      </div>
+        </div>
+        <div id="adminTrades" class="history-list"></div>
+      </section>
+
+      <section class="card admin-panel" data-admin-panel="users">
+        <div class="page-header">
+          <div>
+            <h2>User management</h2>
+            <p class="subtle">Create physicians, create admins, set annual VL limits, disable access, or update credentials.</p>
+          </div>
+        </div>
+        <form id="userCreateForm" class="stack compact-form">
+          <label><span>Full name</span><input type="text" name="full_name" required /></label>
+          <label><span>Username</span><input type="text" name="username" required /></label>
+          <label><span>Email</span><input type="email" name="email" required /></label>
+          <label><span>Password</span><input type="password" name="password" required /></label>
+          <label>
+            <span>Role</span>
+            <select name="role">
+              <option value="physician">Physician</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <label><span>Annual VL day limit</span><input type="number" min="0" name="annual_day_limit" value="0" /></label>
+          <button class="primary-button" type="submit">Create user</button>
+        </form>
+        <div id="adminUsers" class="history-list"></div>
+      </section>
+
+      <section class="card admin-panel" data-admin-panel="holidays">
+        <div class="page-header">
+          <div>
+            <h2>Protected holiday dates</h2>
+            <p class="subtle">These dates stay blank on the vacation calendar and reject user signups.</p>
+          </div>
+        </div>
+        <form id="holidayCreateForm" class="stack compact-form">
+          <label><span>Title</span><input type="text" name="title" required /></label>
+          <label><span>Year</span><input type="number" min="2020" name="year" value="{{ export_year }}" required /></label>
+          <label>
+            <span>Category</span>
+            <select name="category">
+              <option value="major">Major</option>
+              <option value="minor">Minor</option>
+            </select>
+          </label>
+          <label><span>Start date</span><input type="date" name="start_date" required /></label>
+          <label><span>End date</span><input type="date" name="end_date" required /></label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="is_locked" value="true" checked />
+            <span>Block user signups</span>
+          </label>
+          <button class="primary-button" type="submit">Add holiday</button>
+        </form>
+        <div class="inline-actions">
+          <label class="inline-field">
+            <span>View year</span>
+            <input id="holidayYearFilter" type="number" min="2020" value="{{ export_year }}" />
+          </label>
+          <button id="reloadHolidayList" class="secondary-button" type="button">Reload holidays</button>
+        </div>
+        <div id="adminHolidays" class="history-list"></div>
+      </section>
+
+      <section class="card admin-panel" data-admin-panel="logs">
+        <div class="page-header">
+          <div>
+            <h2>Audit logs</h2>
+            <p class="subtle">The activity log records high-level events. The detailed change log records field-by-field changes.</p>
+          </div>
+        </div>
+        <div class="two-column-grid">
+          <div>
+            <h3>Activity log</h3>
+            <div id="activityLog" class="table-list"></div>
+          </div>
+          <div>
+            <h3>Detailed change log</h3>
+            <div id="changeLog" class="table-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card admin-panel" data-admin-panel="export">
+        <div class="page-header">
+          <div>
+            <h2>VL export</h2>
+            <p class="subtle">Dates across the top, physicians alphabetically on the left, and VL in each scheduled cell.</p>
+          </div>
+        </div>
+        <div class="inline-actions">
+          <label class="inline-field">
+            <span>Year</span>
+            <input id="exportYearInput" type="number" min="2020" value="{{ export_year }}" />
+          </label>
+          <button id="loadExportButton" class="secondary-button" type="button">Load table</button>
+          <a id="downloadExportButton" class="primary-button" href="{{ url_for('api_admin_export_csv', year=export_year) }}">Download CSV</a>
+        </div>
+        <div id="exportTable" class="export-table-wrap"></div>
+      </section>
     </div>
   </section>
 </main>
