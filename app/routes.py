@@ -258,6 +258,70 @@ def _generate_temporary_password(length: int = 14):
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+def _active_user_by_identifier(identifier: str):
+    identifier = (identifier or "").strip()
+    if not identifier:
+        return None
+    return query_db(
+        """
+        SELECT *
+        FROM users
+        WHERE deleted_at IS NULL AND is_active = 1 AND (username = ? OR email = ?)
+        """,
+        (identifier, identifier),
+        one=True,
+    )
+
+
+def _email_delivery_feedback(result: dict | None, *, sent_message: str, fallback_message: str):
+    status = (result or {}).get("status", "")
+    error_text = ((result or {}).get("error") or "").strip()
+    if status == "sent":
+        return {"message": sent_message, "toastType": "success", "deliveryStatus": "sent"}
+    suffix = f" {error_text}" if error_text else ""
+    return {
+        "message": f"{fallback_message}{suffix}",
+        "toastType": "warning",
+        "deliveryStatus": status or "logged-only",
+    }
+
+
+def _send_password_reset_email(user, *, lifetime_hours: int = 2):
+    token, _ = _issue_password_reset_token(user["id"], lifetime_hours=lifetime_hours)
+    reset_link = url_for("reset_password", token=token, _external=True)
+    result = send_email(
+        to_email=user["email"],
+        subject="South Bay ED VL Schedule password reset",
+        body=(
+            f"Hello {user['full_name']},\n\n"
+            "A password reset was requested for your South Bay ED VL Schedule account.\n"
+            f"Use this link to reset your password: {reset_link}\n\n"
+            "If you did not request this, you can ignore this email."
+        ),
+        purpose="password-reset",
+        user_id=user["id"],
+    )
+    record_activity(
+        user["id"],
+        "password-reset-requested",
+        f"Password reset requested for {user['username']}.",
+        "user",
+        user["id"],
+    )
+    return result
+
+
+def _password_reset_feedback(result: dict | None):
+    return _email_delivery_feedback(
+        result,
+        sent_message="If that account exists, a password reset email was sent.",
+        fallback_message=(
+            "If that account exists, a password reset link was generated, but email delivery is not fully configured. "
+            "Check Gmail or SMTP settings, or retrieve the link from email_log."
+        ),
+    )
+
+
 def _prompt_mentions_unauthorized_physician(actor, prompt_text: str, managed_physicians: list[dict]):
     if not actor or actor["role"] == "admin" or not prompt_text:
         return None
@@ -297,6 +361,61 @@ def serialize_trade(row):
 def _rotation_years():
     years = query_db("SELECT DISTINCT year FROM holiday_rotation_assignments ORDER BY year ASC")
     return [row["year"] for row in years]
+
+
+def _breakout_score_payload(actor=None):
+    high_score_row = query_db(
+        """
+        SELECT bs.*, u.username, u.full_name
+        FROM breakout_scores bs
+        JOIN users u ON u.id = bs.user_id
+        WHERE u.deleted_at IS NULL
+        ORDER BY bs.score DESC, bs.elapsed_ms ASC, bs.paddle_hits ASC, bs.updated_at ASC
+        LIMIT 1
+        """,
+        one=True,
+    )
+    personal_row = None
+    if actor:
+        personal_row = query_db(
+            """
+            SELECT bs.*, u.username, u.full_name
+            FROM breakout_scores bs
+            JOIN users u ON u.id = bs.user_id
+            WHERE bs.user_id = ?
+            """,
+            (actor["id"],),
+            one=True,
+        )
+    return {
+        "highScore": (
+            {
+                "userId": high_score_row["user_id"],
+                "username": high_score_row["username"],
+                "fullName": high_score_row["full_name"],
+                "score": high_score_row["score"],
+                "elapsedMs": high_score_row["elapsed_ms"],
+                "paddleHits": high_score_row["paddle_hits"],
+                "livesLeft": high_score_row["lives_left"],
+                "brickCount": high_score_row["brick_count"],
+                "updatedAt": high_score_row["updated_at"],
+            }
+            if high_score_row
+            else None
+        ),
+        "personalBest": (
+            {
+                "score": personal_row["score"],
+                "elapsedMs": personal_row["elapsed_ms"],
+                "paddleHits": personal_row["paddle_hits"],
+                "livesLeft": personal_row["lives_left"],
+                "brickCount": personal_row["brick_count"],
+                "updatedAt": personal_row["updated_at"],
+            }
+            if personal_row
+            else None
+        ),
+    }
 
 
 def _default_selected_year(years: list[int]):
@@ -647,6 +766,7 @@ def register_routes(app):
             "nav_managed_physicians": _manageable_physicians_payload(),
             "nav_physician_directory": _physician_directory_payload(),
             "theme_options": theme_options_payload(),
+            "nav_breakout_scores": _breakout_score_payload(current_user()),
         }
 
     @app.route("/")
@@ -691,40 +811,22 @@ def register_routes(app):
     def forgot_password():
         if request.method == "POST":
             identifier = request.form.get("identifier", "").strip()
-            user = query_db(
-                """
-                SELECT *
-                FROM users
-                WHERE deleted_at IS NULL AND is_active = 1 AND (username = ? OR email = ?)
-                """,
-                (identifier, identifier),
-                one=True,
-            )
+            user = _active_user_by_identifier(identifier)
+            result = None
             if user:
-                token, _ = _issue_password_reset_token(user["id"], lifetime_hours=2)
-                reset_link = url_for("reset_password", token=token, _external=True)
-                send_email(
-                    to_email=user["email"],
-                    subject="South Bay ED VL Schedule password reset",
-                    body=(
-                        f"Hello {user['full_name']},\n\n"
-                        "A password reset was requested for your South Bay ED VL Schedule account.\n"
-                        f"Use this link to reset your password: {reset_link}\n\n"
-                        "If you did not request this, you can ignore this email."
-                    ),
-                    purpose="password-reset",
-                    user_id=user["id"],
-                )
-                record_activity(
-                    user["id"],
-                    "password-reset-requested",
-                    f"Password reset requested for {user['username']}.",
-                    "user",
-                    user["id"],
-                )
-            flash("If that account exists, a password reset email has been queued.", "info")
+                result = _send_password_reset_email(user, lifetime_hours=2)
+            feedback = _password_reset_feedback(result)
+            flash(feedback["message"], "info" if feedback["toastType"] == "success" else "warning")
             return redirect(url_for("login"))
         return render_template("forgot_password.html")
+
+    @app.post("/api/password-reset-request")
+    def api_password_reset_request():
+        identifier = request.form.get("identifier", "").strip()
+        user = _active_user_by_identifier(identifier)
+        result = _send_password_reset_email(user, lifetime_hours=2) if user else None
+        feedback = _password_reset_feedback(result)
+        return jsonify({"ok": True, **feedback})
 
     @app.route("/reset-password/<token>", methods=["GET", "POST"])
     def reset_password(token: str):
@@ -832,14 +934,89 @@ def register_routes(app):
 
     @app.get("/api/session")
     def api_session():
+        actor = current_user()
+        breakout_scores = _breakout_score_payload(actor)
         return jsonify(
             {
                 "user": _current_user_payload(),
                 "managedPhysicians": _manageable_physicians_payload(),
                 "physicianDirectory": _physician_directory_payload(),
                 "rotationYears": _rotation_years(),
+                "gameHighScore": breakout_scores["highScore"],
+                "gamePersonalBest": breakout_scores["personalBest"],
             }
         )
+
+    @app.get("/api/game-score")
+    def api_game_score():
+        return jsonify(_breakout_score_payload(current_user()))
+
+    @app.post("/api/game-score")
+    @login_required
+    def api_game_score_submit():
+        actor = current_user()
+        score = _parse_int(request.form.get("score"), None)
+        elapsed_ms = _parse_int(request.form.get("elapsed_ms"), None)
+        paddle_hits = _parse_int(request.form.get("paddle_hits"), 0)
+        lives_left = _parse_int(request.form.get("lives_left"), 0)
+        brick_count = _parse_int(request.form.get("brick_count"), 0)
+        if score is None or elapsed_ms is None or score < 0 or elapsed_ms <= 0:
+            return jsonify({"error": "Valid breakout score details are required."}), 400
+        if paddle_hits is None or paddle_hits < 0 or lives_left is None or lives_left < 0 or brick_count is None or brick_count <= 0:
+            return jsonify({"error": "Breakout stats were incomplete."}), 400
+
+        existing = query_db("SELECT * FROM breakout_scores WHERE user_id = ?", (actor["id"],), one=True)
+
+        def is_better(candidate, baseline):
+            if not baseline:
+                return True
+            if candidate["score"] != baseline["score"]:
+                return candidate["score"] > baseline["score"]
+            if candidate["elapsed_ms"] != baseline["elapsed_ms"]:
+                return candidate["elapsed_ms"] < baseline["elapsed_ms"]
+            if candidate["paddle_hits"] != baseline["paddle_hits"]:
+                return candidate["paddle_hits"] < baseline["paddle_hits"]
+            if candidate["lives_left"] != baseline["lives_left"]:
+                return candidate["lives_left"] > baseline["lives_left"]
+            return candidate["brick_count"] > baseline["brick_count"]
+
+        candidate = {
+            "score": score,
+            "elapsed_ms": elapsed_ms,
+            "paddle_hits": paddle_hits,
+            "lives_left": lives_left,
+            "brick_count": brick_count,
+        }
+        improved = is_better(candidate, existing)
+        if improved:
+            now = iso_now()
+            if existing:
+                execute_db(
+                    """
+                    UPDATE breakout_scores
+                    SET score = ?, elapsed_ms = ?, paddle_hits = ?, lives_left = ?, brick_count = ?, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (score, elapsed_ms, paddle_hits, lives_left, brick_count, now, actor["id"]),
+                )
+            else:
+                execute_db(
+                    """
+                    INSERT INTO breakout_scores (user_id, score, elapsed_ms, paddle_hits, lives_left, brick_count, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (actor["id"], score, elapsed_ms, paddle_hits, lives_left, brick_count, now, now),
+                )
+
+        payload = _breakout_score_payload(actor)
+        is_global_high_score = payload["highScore"] and payload["highScore"]["userId"] == actor["id"] and payload["highScore"]["score"] == score
+        if improved and is_global_high_score:
+            message = f"New breakout high score: {score} by {actor['username']}."
+        elif improved:
+            message = f"Personal best updated to {score}."
+        else:
+            message = f"Score recorded. Personal best remains {payload['personalBest']['score']}."
+        return jsonify({"ok": True, "improved": improved, "message": message, **payload})
 
     @app.get("/api/calendar")
     def api_calendar():
@@ -1901,10 +2078,11 @@ def register_routes(app):
             db.rollback()
             return jsonify({"error": f"Unable to create user: {exc}"}), 400
 
+        email_result = None
         if provisioning_mode == "reset_link":
             token, _ = _issue_password_reset_token(user_id, lifetime_hours=72)
             reset_link = url_for("reset_password", token=token, _external=True)
-            send_email(
+            email_result = send_email(
                 to_email=email,
                 subject="Set up your South Bay ED VL Schedule password",
                 body=(
@@ -1917,8 +2095,8 @@ def register_routes(app):
                 purpose="new-user-reset-link",
                 user_id=user_id,
             )
-        else:
-            send_email(
+        elif provisioning_mode == "random_password":
+            email_result = send_email(
                 to_email=email,
                 subject="Your South Bay ED VL Schedule account",
                 body=(
@@ -1944,12 +2122,35 @@ def register_routes(app):
                 {"field_name": "provisioning_mode", "old_value": None, "new_value": provisioning_mode},
             ],
         )
-        message = (
-            f"Created {full_name} and emailed a password setup link."
-            if provisioning_mode == "reset_link"
-            else f"Created {full_name} and emailed a temporary password."
-        )
-        return jsonify({"ok": True, "message": message})
+        if provisioning_mode == "manual_password":
+            return jsonify(
+                {
+                    "ok": True,
+                    "message": f"Created {full_name} with a manually set password.",
+                    "toastType": "success",
+                    "deliveryStatus": "not-requested",
+                }
+            )
+
+        if provisioning_mode == "reset_link":
+            feedback = _email_delivery_feedback(
+                email_result,
+                sent_message=f"Created {full_name} and emailed a password setup link.",
+                fallback_message=(
+                    f"Created {full_name}, but the password setup email was not sent. "
+                    "Check Gmail or SMTP settings, or retrieve the link from email_log."
+                ),
+            )
+        else:
+            feedback = _email_delivery_feedback(
+                email_result,
+                sent_message=f"Created {full_name} and emailed a temporary password.",
+                fallback_message=(
+                    f"Created {full_name}, but the temporary password email was not sent. "
+                    "Check Gmail or SMTP settings, or retrieve it from email_log."
+                ),
+            )
+        return jsonify({"ok": True, **feedback})
 
     @app.post("/api/admin/users/<int:user_id>")
     @admin_required

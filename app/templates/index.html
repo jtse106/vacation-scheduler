@@ -33,26 +33,26 @@
       <div class="calendar-header">
         <div class="calendar-heading-row calendar-title-wrap">
           <h1 id="calendarTitle">{{ month_name }} {{ current_year }}</h1>
-          <p class="subtle">{% if nav_user and nav_user.role == 'physician' %}Click or drag across days to select your range, then press Enter or use the toolbar to assign it to yourself.{% else %}Tap a day to see physicians already scheduled off.{% endif %}</p>
+          <p class="subtle">{% if nav_user and nav_user.role == 'physician' %}Click or drag across days to select your range.{% else %}Tap a day to see physicians already scheduled off.{% endif %}</p>
         </div>
-        <div class="calendar-nav">
-          <button id="prevMonth" class="icon-button" type="button"><</button>
-          <button id="nextMonth" class="icon-button" type="button">></button>
+        <div class="calendar-header-tools">
+          {% if nav_user and nav_user.role == 'physician' %}
+            <div id="selectionToolbar" class="selection-toolbar hidden" aria-hidden="true">
+              <div class="selection-toolbar-copy">
+                <strong id="selectionLabel">No dates selected</strong>
+              </div>
+              <div class="inline-actions">
+                <button id="assignSelectionButton" class="primary-button" type="button">Assign me</button>
+                <button id="unassignSelectionButton" class="secondary-button" type="button">Unassign me</button>
+              </div>
+            </div>
+          {% endif %}
+          <div class="calendar-nav">
+            <button id="prevMonth" class="icon-button" type="button"><</button>
+            <button id="nextMonth" class="icon-button" type="button">></button>
+          </div>
         </div>
       </div>
-      {% if nav_user and nav_user.role == 'physician' %}
-        <div id="selectionToolbar" class="selection-toolbar hidden" aria-hidden="true">
-          <div>
-            <strong id="selectionLabel">No dates selected</strong>
-            <p class="subtle">Drag across dates to select a range. Use Delete or Backspace to unassign yourself from the selected dates.</p>
-          </div>
-          <div class="inline-actions">
-            <button id="assignSelectionButton" class="primary-button" type="button">Assign me</button>
-            <button id="unassignSelectionButton" class="secondary-button" type="button">Unassign me</button>
-            <button id="clearSelectionButton" class="secondary-button" type="button">Clear</button>
-          </div>
-        </div>
-      {% endif %}
       <div id="calendarMount"
         data-year="{{ current_year }}"
         data-month="{{ current_month }}"

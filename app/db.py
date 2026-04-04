@@ -178,6 +178,18 @@ CREATE TABLE IF NOT EXISTS change_log (
     FOREIGN KEY (activity_log_id) REFERENCES activity_log(id) ON DELETE SET NULL,
     FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS breakout_scores (
+    user_id INTEGER PRIMARY KEY,
+    score INTEGER NOT NULL,
+    elapsed_ms INTEGER NOT NULL,
+    paddle_hits INTEGER NOT NULL DEFAULT 0,
+    lives_left INTEGER NOT NULL DEFAULT 0,
+    brick_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 """
 
 
@@ -198,6 +210,7 @@ def init_db(app):
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_vacation_requests_dates ON vacation_requests(start_date, end_date)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_vacation_requests_user ON vacation_requests(user_id, status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_holiday_definitions_dates ON holiday_definitions(start_date, end_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_breakout_scores_score ON breakout_scores(score DESC, elapsed_ms ASC, paddle_hits ASC)")
         _normalize_existing_records(db)
         ensure_holiday_definitions(date.today().year - 1, date.today().year + 2)
         db.commit()

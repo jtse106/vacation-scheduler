@@ -4,7 +4,7 @@
   {% include "_sidebar.html" %}
   <section class="content-pane">
     <div class="page-shell stack">
-      <section class="card page-panel">
+      <section class="card page-panel subpage-hero-panel">
         <div class="page-header">
           <div>
             <span class="page-kicker">Administration</span>
@@ -64,14 +64,12 @@
               <option value="admin">Admin</option>
             </select>
           </label>
-          <label>
-            <span>Password setup</span>
-            <select name="provisioning_mode" id="userProvisioningMode">
-              <option value="reset_link" selected>Email reset link</option>
-              <option value="manual_password">Set password now</option>
-              <option value="random_password">Generate password</option>
-            </select>
+          <input type="hidden" name="provisioning_mode" id="userProvisioningMode" value="reset_link" />
+          <label class="checkbox-row user-provisioning-toggle">
+            <input type="checkbox" id="userProvisioningManualToggle" />
+            <span>Manually set the initial password instead of emailing a setup link</span>
           </label>
+          <p id="userProvisioningHelp" class="subtle form-hint">Default: email a setup link to the new user.</p>
           <label id="userCreatePasswordField" hidden>
             <span>Password</span>
             <input type="password" name="password" data-password-primary />
@@ -81,8 +79,8 @@
             <input type="password" name="confirm_password" data-password-confirm />
           </label>
           <div id="userCreateRandomActions" class="inline-actions" hidden>
-            <button id="generateUserPasswordButton" class="secondary-button" type="button">Generate password</button>
-            <span class="subtle">This temporary password will be emailed to the user.</span>
+            <button id="generateUserPasswordButton" class="secondary-button" type="button">Generate random password</button>
+            <span class="subtle">Fill both password fields with a strong generated password.</span>
           </div>
           <div class="form-feedback hidden" data-password-feedback></div>
           <button class="primary-button" type="submit">Create user</button>

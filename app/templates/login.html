@@ -16,7 +16,29 @@
       </label>
       <button class="primary-button" type="submit">Log in</button>
     </form>
-    <p class="subtle top-gap"><a href="{{ url_for('forgot_password') }}">Forgot your password?</a></p>
+    <div class="auth-links top-gap">
+      <button id="openForgotPasswordModal" class="text-button auth-link-button" type="button">Forgot password?</button>
+      <a class="subtle" href="{{ url_for('forgot_password') }}">Open the standalone reset page</a>
+    </div>
   </section>
 </main>
+
+<div id="forgotPasswordModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-card auth-modal-card">
+    <div class="modal-header">
+      <div>
+        <h2>Reset password</h2>
+        <p class="subtle">Enter your username or email address and the app will generate a reset link for that account.</p>
+      </div>
+      <button class="icon-button window-close" data-close-modal="forgotPasswordModal" type="button" aria-label="Close">X</button>
+    </div>
+    <form id="loginForgotPasswordForm" class="stack">
+      <label>
+        <span>Username or email</span>
+        <input type="text" name="identifier" required />
+      </label>
+      <button class="primary-button" type="submit">Send reset link</button>
+    </form>
+  </div>
+</div>
 {% endblock %}

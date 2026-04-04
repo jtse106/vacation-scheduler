@@ -346,6 +346,28 @@ def main():
                 page.set_viewport_size({"width": 1440, "height": 960})
 
                 login(page, "admin", "Admin123!")
+                for path, heading in [
+                    ("/history", "Vacation history"),
+                    ("/holiday-rotation", "Guaranteed holiday time off"),
+                    ("/legacy-calendars", "Legacy VL calendars"),
+                    ("/instructions", "Instructions"),
+                    ("/vacation-guidelines", "Vacation guidelines"),
+                    ("/admin", "Admin console"),
+                ]:
+                    page.goto(f"{BASE_URL}{path}")
+                    expect(page.locator(".topbar")).to_be_visible()
+                    expect(page.locator(".subpage-hero-panel")).to_be_visible()
+                    expect(page.locator("h1")).to_contain_text(heading)
+                    header_styles = page.evaluate(
+                        """
+                        () => ({
+                          topbar: getComputedStyle(document.querySelector('.topbar')).backgroundImage,
+                          hero: getComputedStyle(document.querySelector('.subpage-hero-panel')).backgroundImage,
+                        })
+                        """
+                    )
+                    assert "gradient" in header_styles["topbar"].lower(), header_styles
+                    assert "gradient" in header_styles["hero"].lower(), header_styles
                 page.goto(f"{BASE_URL}/admin")
                 page.get_by_role("button", name="Users", exact=True).click()
                 expect(page.locator(".admin-user-group-title", has_text="Admin accounts")).to_be_visible()
@@ -365,20 +387,21 @@ def main():
                 user_form_width = page.locator('#userCreateForm input[name="full_name"]').bounding_box()
                 assert user_form_width is not None
                 assert user_form_width["width"] < 420
+                expect(page.locator("#userProvisioningManualToggle")).not_to_be_checked()
                 expect(page.locator("#userCreatePasswordField")).to_be_hidden()
                 expect(page.locator("#userCreateConfirmPasswordField")).to_be_hidden()
 
                 page.fill('#userCreateForm input[name="full_name"]', "Playwright Admin")
                 page.fill('#userCreateForm input[name="username"]', "padmin")
                 page.fill('#userCreateForm input[name="email"]', "padmin@example.com")
-                page.select_option('#userCreateForm select[name="provisioning_mode"]', "manual_password")
+                page.locator("#userProvisioningManualToggle").check()
                 expect(page.locator("#userCreatePasswordField")).to_be_visible()
                 expect(page.locator("#userCreateConfirmPasswordField")).to_be_visible()
                 page.fill('#userCreateForm input[name="password"]', "AdminEdge123!")
                 page.fill('#userCreateForm input[name="confirm_password"]', "AdminEdge123!")
                 page.select_option('#userCreateForm select[name="role"]', "admin")
                 page.get_by_role("button", name="Create user").click()
-                wait_for_toast(page, "emailed a temporary password")
+                wait_for_toast(page, "manually set password")
                 admin_row = page.locator(".admin-user-row", has_text="Playwright Admin")
                 expect(admin_row).to_be_visible()
                 admin_row.get_by_role("button", name="Edit / reset password").click()
@@ -391,10 +414,9 @@ def main():
                 page.fill('#userCreateForm input[name="full_name"]', "Playwright Doctor")
                 page.fill('#userCreateForm input[name="username"]', "pdoctor")
                 page.fill('#userCreateForm input[name="email"]', "pdoctor@example.com")
-                page.select_option('#userCreateForm select[name="provisioning_mode"]', "reset_link")
                 page.select_option('#userCreateForm select[name="role"]', "physician")
                 page.get_by_role("button", name="Create user").click()
-                wait_for_toast(page, "password setup link")
+                wait_for_toast(page, "password setup email was not sent")
                 expect(page.locator("#adminUsers")).to_contain_text("Playwright Doctor")
                 created_user_email = query_one(
                     db_path,
@@ -408,16 +430,18 @@ def main():
                 page.fill('#userCreateForm input[name="full_name"]', "Delete Doctor")
                 page.fill('#userCreateForm input[name="username"]', "delete_doc")
                 page.fill('#userCreateForm input[name="email"]', "delete_doc@example.com")
-                page.select_option('#userCreateForm select[name="provisioning_mode"]', "random_password")
+                page.locator("#userProvisioningManualToggle").check()
                 expect(page.locator("#userCreatePasswordField")).to_be_visible()
-                expect(page.locator("#userCreateConfirmPasswordField")).to_be_hidden()
+                expect(page.locator("#userCreateConfirmPasswordField")).to_be_visible()
                 generated_password = page.locator('#userCreateForm input[name="password"]').input_value()
-                assert len(generated_password) >= 12
-                page.get_by_role("button", name="Generate password").click()
+                assert generated_password == ""
+                page.get_by_role("button", name="Generate random password").click()
                 regenerated_password = page.locator('#userCreateForm input[name="password"]').input_value()
-                assert regenerated_password != generated_password
+                regenerated_confirm = page.locator('#userCreateForm input[name="confirm_password"]').input_value()
+                assert len(regenerated_password) >= 12
+                assert regenerated_password == regenerated_confirm
                 page.get_by_role("button", name="Create user").click()
-                wait_for_toast(page, "emailed a temporary password")
+                wait_for_toast(page, "manually set password")
                 delete_row = page.locator(".admin-user-row", has_text="Delete Doctor")
                 expect(delete_row).to_be_visible()
                 page.evaluate("() => { window.confirm = () => true; }")
@@ -486,10 +510,12 @@ def main():
                 login(page, "pdoctor", "AdminReset123!")
                 logout(page)
 
-                page.goto(f"{BASE_URL}/forgot-password")
-                page.fill('input[name="identifier"]', "pdoctor")
+                page.get_by_role("button", name="Forgot password?").click()
+                page.wait_for_selector("#forgotPasswordModal:not(.hidden)")
+                page.fill('#loginForgotPasswordForm input[name="identifier"]', "pdoctor")
                 page.get_by_role("button", name="Send reset link").click()
-                page.wait_for_url(f"{BASE_URL}/login")
+                wait_for_toast(page, "password reset link was generated")
+                expect(page.locator("#forgotPasswordModal")).to_be_hidden()
                 token_row = query_one(db_path, "SELECT token FROM password_reset_tokens ORDER BY id DESC LIMIT 1")
                 password_reset_email = query_one(
                     db_path,
@@ -554,13 +580,16 @@ def main():
                     """
                     () => {
                       const card = document.querySelector('#settingsPanel .settings-card');
+                      const form = document.querySelector('#settingsPasswordForm');
                       const rect = card.getBoundingClientRect();
+                      const formRect = form.getBoundingClientRect();
                       const maxRight = [...card.querySelectorAll('*')]
                         .filter((el) => !el.hidden && getComputedStyle(el).display !== 'none')
                         .reduce((value, el) => Math.max(value, el.getBoundingClientRect().right), rect.right);
                       return {
                         width: rect.width,
                         height: rect.height,
+                        formHeight: formRect.height,
                         scrollHeight: card.scrollHeight,
                         clientHeight: card.clientHeight,
                         overflowRight: maxRight - rect.right,
@@ -570,6 +599,7 @@ def main():
                 )
                 assert abs(password_settings_metrics["width"] - settings_metrics["width"]) < 2, password_settings_metrics
                 assert abs(password_settings_metrics["height"] - settings_metrics["height"]) < 2, password_settings_metrics
+                assert password_settings_metrics["formHeight"] < password_settings_metrics["height"] * 0.82, password_settings_metrics
                 assert password_settings_metrics["scrollHeight"] <= password_settings_metrics["clientHeight"] + 2, password_settings_metrics
                 assert password_settings_metrics["overflowRight"] <= 2, password_settings_metrics
                 page.fill('#settingsPasswordForm input[name="current_password"]', "Reset12345!")
@@ -607,9 +637,26 @@ def main():
                 page.locator('[data-day="2026-10-20"]').click()
                 expect(page.locator("#dayModal")).to_be_hidden()
                 expect(page.locator("#selectionToolbar")).to_be_visible()
+                expect(page.locator("#clearSelectionButton")).to_have_count(0)
                 expect(page.locator("#selectionLabel")).to_contain_text("2026-10-20")
+                toolbar_position = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector('#selectionToolbar')?.getBoundingClientRect();
+                      const mount = document.querySelector('#calendarMount')?.getBoundingClientRect();
+                      return { toolbarBottom: toolbar?.bottom ?? 0, mountTop: mount?.top ?? 0 };
+                    }
+                    """
+                )
+                assert toolbar_position["toolbarBottom"] <= toolbar_position["mountTop"], toolbar_position
                 drag_select_dates(page, "2026-10-20", "2026-10-22")
                 expect(page.locator("#selectionToolbar")).to_be_visible()
+                expect(page.locator("#selectionLabel")).to_contain_text("2026-10-20 to 2026-10-22")
+                page.locator("#calendarTitle").click()
+                expect(page.locator("#selectionToolbar")).to_be_hidden()
+                page.locator('[data-day="2026-10-20"]').click()
+                expect(page.locator("#selectionToolbar")).to_be_visible()
+                drag_select_dates(page, "2026-10-20", "2026-10-22")
                 expect(page.locator("#selectionLabel")).to_contain_text("2026-10-20 to 2026-10-22")
                 page.keyboard.press("Enter")
                 wait_for_toast(page, "Vacation scheduled.")
@@ -750,7 +797,7 @@ def main():
                 )
                 assert visibility["count"] == 6
                 assert not visibility["clipped"], visibility
-                assert visibility["bottomGap"] is not None and visibility["bottomGap"] < 18, visibility
+                assert visibility["bottomGap"] is not None and 4 <= visibility["bottomGap"] <= 22, visibility
                 assert max(visibility["openHeights"]) - min(visibility["openHeights"]) < 1.5, visibility
                 expect(page.locator(f'[data-day="{waitlist_day}"] .waitlist-badge')).to_have_text("W2")
 
@@ -846,6 +893,7 @@ def main():
                 page.wait_for_selector("#gameOverlay:not(.hidden)")
                 assert page.evaluate("() => window.__VACATION_SCHEDULER_STATE__.game.lives") == 3
                 assert page.evaluate("() => window.__VACATION_SCHEDULER_STATE__.game.bricks[0].label") != "VL"
+                expect(page.locator("#gameHighScoreValue")).to_be_visible()
                 page.evaluate(
                     """
                     () => {
@@ -896,13 +944,41 @@ def main():
                     page.keyboard.press(key)
                 page.wait_for_selector("#gameOverlay:not(.hidden)")
                 page.evaluate(
-                    "() => { window.__VACATION_SCHEDULER_STATE__.game.bricks.forEach((brick) => { brick.alive = false; }); }"
+                    """
+                    () => {
+                      const game = window.__VACATION_SCHEDULER_STATE__.game;
+                      game.startedAt = performance.now() - 1200;
+                      game.paddleHits = 1;
+                      game.lives = 3;
+                      game.bricks.forEach((brick) => { brick.alive = false; });
+                    }
+                    """
                 )
                 page.wait_for_function(
-                    "() => (document.querySelector('#gameStatus')?.textContent || '').includes('Congratulations!')",
+                    "() => (document.querySelector('#gameHighScoreValue')?.textContent || '') !== 'No score yet'",
                     timeout=10000,
                 )
                 expect(page.locator("#confettiLayer .confetti-piece")).to_have_count(56)
+                breakout_row = query_one(
+                    db_path,
+                    "SELECT score, elapsed_ms, paddle_hits FROM breakout_scores bs JOIN users u ON u.id = bs.user_id WHERE u.username = ?",
+                    (trade_target["username"],),
+                )
+                assert breakout_row is not None
+                assert breakout_row["score"] > 0
+                page.get_by_role("button", name="Close").click()
+                expect(page.locator("#gameOverlay")).to_be_hidden()
+
+                page.goto(f"{BASE_URL}/history")
+                page.wait_for_function(
+                    "() => Boolean(window.__VACATION_SCHEDULER_STATE__?.session?.gameHighScore)",
+                    timeout=10000,
+                )
+                for key in KONAMI:
+                    page.keyboard.press(key)
+                page.wait_for_selector("#gameOverlay:not(.hidden)")
+                expect(page.locator("#gameHighScoreValue")).not_to_have_text("No score yet")
+                expect(page.locator("#gameHighScoreUser")).to_contain_text(trade_target["full_name"])
 
                 browser.close()
         finally:

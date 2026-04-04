@@ -9,6 +9,8 @@ const state = {
     managedPhysicians: window.APP_CONFIG.managedPhysicians || [],
     physicianDirectory: window.APP_CONFIG.physicianDirectory || [],
     rotationYears: window.APP_CONFIG.rotationYears || [],
+    gameHighScore: window.APP_CONFIG.gameHighScore || null,
+    gamePersonalBest: window.APP_CONFIG.gamePersonalBest || null,
   },
   editingRequestId: null,
   adminHolidaysYear: new Date().getFullYear(),
@@ -435,6 +437,8 @@ async function refreshSession() {
     managedPhysicians: data.managedPhysicians || [],
     physicianDirectory: data.physicianDirectory || [],
     rotationYears: data.rotationYears || [],
+    gameHighScore: data.gameHighScore || data.highScore || null,
+    gamePersonalBest: data.gamePersonalBest || data.personalBest || null,
   };
   if (state.session.currentUser) {
     state.weekStart = state.session.currentUser.weekStart;
@@ -450,6 +454,7 @@ async function refreshSession() {
   syncRequestModalFields();
   populateDelegationSelect();
   populateTradeTargetUsers();
+  renderBreakoutScoreboard();
 }
 
 function populatePhysicianSelects() {
@@ -480,28 +485,34 @@ function populateDelegationSelect() {
 function syncUserCreateProvisioningMode() {
   const form = qs("#userCreateForm");
   if (!form) return;
-  const mode = qs("#userProvisioningMode")?.value || "reset_link";
+  const modeInput = qs("#userProvisioningMode");
+  const manualToggle = qs("#userProvisioningManualToggle");
+  const helpText = qs("#userProvisioningHelp");
+  const mode = manualToggle?.checked ? "manual_password" : "reset_link";
   const passwordField = qs("#userCreatePasswordField");
   const confirmField = qs("#userCreateConfirmPasswordField");
   const randomActions = qs("#userCreateRandomActions");
   const passwordInput = passwordField?.querySelector('input[name="password"]');
   const confirmInput = confirmField?.querySelector('input[name="confirm_password"]');
   const usesPasswordInputs = mode === "manual_password";
-  if (passwordField) passwordField.hidden = mode === "reset_link";
-  if (confirmField) confirmField.hidden = mode !== "manual_password";
-  if (randomActions) randomActions.hidden = mode !== "random_password";
-  if (passwordInput && mode === "random_password" && !passwordInput.value) {
-    passwordInput.value = generateTemporaryPassword();
+  if (modeInput) modeInput.value = mode;
+  if (passwordField) passwordField.hidden = !usesPasswordInputs;
+  if (confirmField) confirmField.hidden = !usesPasswordInputs;
+  if (randomActions) randomActions.hidden = !usesPasswordInputs;
+  if (helpText) {
+    helpText.textContent = usesPasswordInputs
+      ? "Set the password yourself, or use the generate button to fill both fields."
+      : "Default: email a setup link to the new user.";
   }
   if (passwordInput) {
-    passwordInput.disabled = mode === "reset_link";
+    passwordInput.disabled = !usesPasswordInputs;
     passwordInput.required = usesPasswordInputs;
-    if (mode === "reset_link") passwordInput.value = "";
+    if (!usesPasswordInputs) passwordInput.value = "";
   }
   if (confirmInput) {
-    confirmInput.disabled = mode !== "manual_password";
+    confirmInput.disabled = !usesPasswordInputs;
     confirmInput.required = usesPasswordInputs;
-    if (mode !== "manual_password") confirmInput.value = "";
+    if (!usesPasswordInputs) confirmInput.value = "";
   }
   resetFormFeedback(form);
 }
@@ -1121,6 +1132,35 @@ function startDictation() {
   recognition.start();
 }
 
+function formatBreakoutScore(value) {
+  return Number.isFinite(value) ? Math.max(0, Math.round(value)).toLocaleString() : "0";
+}
+
+function computeBreakoutScore({ brickCount, elapsedMs, paddleHits, livesLeft }) {
+  const elapsedSeconds = elapsedMs / 1000;
+  return Math.max(0, Math.round(brickCount * 520 + livesLeft * 900 - elapsedSeconds * 42 - paddleHits * 28));
+}
+
+function renderBreakoutScoreboard(currentScore = null) {
+  const currentNode = qs("#gameCurrentScore");
+  const highScoreValue = qs("#gameHighScoreValue");
+  const highScoreUser = qs("#gameHighScoreUser");
+  if (currentNode) currentNode.textContent = formatBreakoutScore(currentScore ?? state.game?.score ?? 0);
+  if (highScoreValue) {
+    highScoreValue.textContent = state.session.gameHighScore ? formatBreakoutScore(state.session.gameHighScore.score) : "No score yet";
+  }
+  if (highScoreUser) {
+    if (state.session.gameHighScore) {
+      const owner = state.session.gameHighScore.fullName || state.session.gameHighScore.username;
+      highScoreUser.textContent = `${owner} holds the top score.`;
+    } else if (state.session.currentUser) {
+      highScoreUser.textContent = "Finish a winning run to claim the first score.";
+    } else {
+      highScoreUser.textContent = "Log in to claim the high score.";
+    }
+  }
+}
+
 function renderGameStatus(message) {
   const status = qs("#gameStatus");
   if (status) status.textContent = message;
@@ -1153,6 +1193,26 @@ function destroyGame() {
   }
   clearConfetti();
   state.game = null;
+  renderBreakoutScoreboard(0);
+}
+
+async function submitBreakoutScore(game) {
+  if (!state.session.currentUser || !game?.won || game.score <= 0) return;
+  const formData = new FormData();
+  formData.set("score", String(Math.round(game.score)));
+  formData.set("elapsed_ms", String(Math.max(1, Math.round(game.elapsedMs))));
+  formData.set("paddle_hits", String(Math.max(0, Math.round(game.paddleHits))));
+  formData.set("lives_left", String(Math.max(0, Math.round(game.lives))));
+  formData.set("brick_count", String(Math.max(1, Math.round(game.bricks.length))));
+  try {
+    const result = await fetchJson("/api/game-score", { method: "POST", body: formData });
+    state.session.gameHighScore = result.highScore || null;
+    state.session.gamePersonalBest = result.personalBest || null;
+    renderBreakoutScoreboard(game.score);
+    renderGameStatus(`Score ${formatBreakoutScore(game.score)}. ${result.message}`);
+  } catch (error) {
+    renderGameStatus(`Score ${formatBreakoutScore(game.score)}. ${error?.message || String(error)}`);
+  }
 }
 
 function startBreakoutGame() {
@@ -1212,9 +1272,27 @@ function startBreakoutGame() {
     message: "Konami code unlocked. Break the physician schedule blocks.",
     ballExplosion: null,
     bricks,
+    startedAt: performance.now(),
+    elapsedMs: 0,
+    paddleHits: 0,
+    score: 0,
+    scoreSubmitted: false,
   };
   state.game = game;
-  renderGameStatus(`Lives: ${game.lives} | ${game.message}`);
+
+  function updateLiveScore() {
+    game.elapsedMs = Math.max(1, performance.now() - game.startedAt);
+    game.score = computeBreakoutScore({
+      brickCount: game.bricks.length,
+      elapsedMs: game.elapsedMs,
+      paddleHits: game.paddleHits,
+      livesLeft: game.lives,
+    });
+    renderBreakoutScoreboard(game.score);
+  }
+
+  updateLiveScore();
+  renderGameStatus(`Lives: ${game.lives} | Score: ${formatBreakoutScore(game.score)} | ${game.message}`);
 
   function resetBall() {
     game.ballX = canvas.width / 2;
@@ -1234,7 +1312,8 @@ function startBreakoutGame() {
 
   function updateStatus(message = game.message) {
     game.message = message;
-    renderGameStatus(`Lives: ${game.lives} | ${message}`);
+    updateLiveScore();
+    renderGameStatus(`Lives: ${game.lives} | Score: ${formatBreakoutScore(game.score)} | ${message}`);
   }
 
   function bounceOffPaddle() {
@@ -1245,9 +1324,20 @@ function startBreakoutGame() {
     game.ballDx = speed * Math.sin(bounceAngle);
     game.ballDy = -Math.max(2.8, speed * Math.cos(bounceAngle));
     game.ballY = canvas.height - 39;
+    game.paddleHits += 1;
+  }
+
+  async function finalizeGame(message) {
+    if (game.scoreSubmitted) return;
+    game.scoreSubmitted = true;
+    updateStatus(message);
+    if (game.won) {
+      await submitBreakoutScore(game);
+    }
   }
 
   function draw() {
+    updateLiveScore();
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = "#12284b";
     context.fillRect(0, 0, canvas.width, canvas.height);
@@ -1292,6 +1382,8 @@ function startBreakoutGame() {
     context.font = "600 14px Segoe UI";
     context.textAlign = "left";
     context.fillText(`Lives ${game.lives}`, 18, 26);
+    context.textAlign = "right";
+    context.fillText(`Score ${formatBreakoutScore(game.score)}`, canvas.width - 18, 26);
 
     if (!game.won && !game.lost) {
       if (game.leftPressed) game.paddleX -= 7;
@@ -1323,7 +1415,7 @@ function startBreakoutGame() {
         explodeBall();
         if (game.lives <= 0) {
           game.lost = true;
-          updateStatus("You lost. You need to go see more patients.");
+          finalizeGame("You lost. You need to go see more patients.");
         } else {
           resetBall();
           updateStatus(`Missed it. ${game.lives} ${game.lives === 1 ? "life" : "lives"} left.`);
@@ -1341,7 +1433,7 @@ function startBreakoutGame() {
       game.won = true;
       explodeBall();
       burstConfetti();
-      updateStatus("Congratulations! You beat the Emergency Department. You can now take early retirement :)");
+      finalizeGame("Congratulations! You beat the Emergency Department. You can now take early retirement :)");
     }
     if ((game.won || game.lost) && !game.ballExplosion) {
       return;
@@ -1411,15 +1503,18 @@ function attachGlobalEvents() {
   qs("#settingsButton")?.addEventListener("click", () => openSettingsPanel("appearance"));
   qs("#openRequestModal")?.addEventListener("click", openRequestModalForCreate);
   qs("#openRequestModalInline")?.addEventListener("click", openRequestModalForCreate);
+  qs("#openForgotPasswordModal")?.addEventListener("click", () => openModal("forgotPasswordModal"));
   qs("#assignSelectionButton")?.addEventListener("click", assignSelectedRange);
   qs("#unassignSelectionButton")?.addEventListener("click", unassignSelectedRange);
-  qs("#clearSelectionButton")?.addEventListener("click", clearSelection);
-  qs("#userProvisioningMode")?.addEventListener("change", syncUserCreateProvisioningMode);
+  qs("#userProvisioningManualToggle")?.addEventListener("change", syncUserCreateProvisioningMode);
   qs("#generateUserPasswordButton")?.addEventListener("click", () => {
     const passwordInput = qs('#userCreateForm input[name="password"]');
+    const confirmInput = qs('#userCreateForm input[name="confirm_password"]');
     if (!passwordInput) return;
-    passwordInput.value = generateTemporaryPassword();
-    qs('#userCreateForm input[name="confirm_password"]')?.dispatchEvent(new Event("input", { bubbles: true }));
+    const generatedPassword = generateTemporaryPassword();
+    passwordInput.value = generatedPassword;
+    if (confirmInput) confirmInput.value = generatedPassword;
+    confirmInput?.dispatchEvent(new Event("input", { bubbles: true }));
     passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
   });
   qsa("[data-settings-section-button]").forEach((button) => {
@@ -1544,6 +1639,9 @@ function attachGlobalEvents() {
       }
       await loadDayDetails(miniButton.dataset.miniDate);
       return;
+    }
+    if (selectionEnabled() && currentSelectionRange() && !event.target.closest("#selectionToolbar, .modal-card, .game-panel")) {
+      clearSelection();
     }
     const editRequest = event.target.closest("[data-edit-request]");
     if (editRequest) {
@@ -1717,6 +1815,15 @@ function attachGlobalEvents() {
     showToast("Trade offer sent.", "success");
   });
 
+  qs("#loginForgotPasswordForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const result = await fetchJson("/api/password-reset-request", { method: "POST", body: new FormData(form) });
+    form.reset();
+    closeModal("forgotPasswordModal");
+    showToast(result.message || "Password reset request received.", result.toastType || "info");
+  });
+
   qs("#userCreateForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1725,7 +1832,7 @@ function attachGlobalEvents() {
     syncUserCreateProvisioningMode();
     resetFormFeedback(form);
     await Promise.all([loadAdminUsers(), refreshSession()]);
-    showToast(result.message || "User created.", "success");
+    showToast(result.message || "User created.", result.toastType || "success");
   });
 
   qs("#userEditForm")?.addEventListener("submit", async (event) => {
@@ -1790,6 +1897,7 @@ async function init() {
   }
 
   applyTheme(state.themeSkin);
+  renderBreakoutScoreboard();
   enhancePasswordFields();
   setSettingsSection(state.settings.activeSection);
   qsa(".password-validation-form").forEach(bindPasswordValidation);

@@ -117,7 +117,7 @@
               </section>
 
               <section class="settings-section" data-settings-section="password" hidden>
-                <form id="settingsPasswordForm" class="stack assistant-card compact-settings-form password-validation-form">
+                <form id="settingsPasswordForm" class="stack assistant-card compact-settings-form settings-password-card password-validation-form">
                   <div class="settings-section-copy">
                     <h3>Change password</h3>
                     <p class="subtle">Update the account password without leaving the calendar.</p>
@@ -269,6 +269,17 @@
           <button class="icon-button window-close" id="closeGameOverlay" type="button" aria-label="Close">X</button>
         </div>
         <p class="subtle">Break the vacation cells. Move with Left and Right.</p>
+        <div id="gameScoreboard" class="game-scoreboard">
+          <div class="game-score-card">
+            <span class="game-score-label">Current</span>
+            <strong id="gameCurrentScore">0</strong>
+          </div>
+          <div class="game-score-card">
+            <span class="game-score-label">Best</span>
+            <strong id="gameHighScoreValue">No score yet</strong>
+            <span id="gameHighScoreUser" class="subtle">Log in to claim the high score.</span>
+          </div>
+        </div>
         <canvas id="breakoutCanvas" width="720" height="420"></canvas>
         <div id="gameStatus" class="subtle"></div>
         <div id="confettiLayer" class="confetti-layer" aria-hidden="true"></div>
@@ -282,6 +293,8 @@
         physicianDirectory: {{ nav_physician_directory | tojson }},
         themeOptions: {{ theme_options | tojson }},
         rotationYears: [],
+        gameHighScore: {{ nav_breakout_scores.highScore | tojson }},
+        gamePersonalBest: {{ nav_breakout_scores.personalBest | tojson }},
       };
     </script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>
