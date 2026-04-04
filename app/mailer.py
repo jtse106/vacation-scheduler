@@ -1,9 +1,49 @@
+import base64
 import smtplib
 from email.message import EmailMessage
 
 from flask import current_app
+import requests
 
 from .db import execute_db
+
+
+def _gmail_api_result(message: EmailMessage):
+    client_id = (current_app.config.get("GMAIL_CLIENT_ID") or "").strip()
+    client_secret = (current_app.config.get("GMAIL_CLIENT_SECRET") or "").strip()
+    refresh_token = (current_app.config.get("GMAIL_REFRESH_TOKEN") or "").strip()
+    if not any([client_id, client_secret, refresh_token]):
+        return None
+    if not all([client_id, client_secret, refresh_token]):
+        return {
+            "status": "logged-only",
+            "error": "Incomplete Gmail API credentials. Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, and GMAIL_REFRESH_TOKEN to enable Gmail delivery.",
+        }
+
+    try:
+        token_response = requests.post(
+            current_app.config.get("GMAIL_TOKEN_URL", "https://oauth2.googleapis.com/token"),
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+            timeout=20,
+        )
+        token_response.raise_for_status()
+        access_token = token_response.json()["access_token"]
+        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode().rstrip("=")
+        send_response = requests.post(
+            current_app.config.get("GMAIL_SEND_URL", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"),
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"raw": raw_message},
+            timeout=20,
+        )
+        send_response.raise_for_status()
+        return {"status": "sent", "error": ""}
+    except Exception as exc:  # pragma: no cover - network-specific behavior
+        return {"status": "error", "error": str(exc)}
 
 
 def send_email(*, to_email: str, subject: str, body: str, purpose: str, user_id=None, request_id=None):
@@ -11,15 +51,21 @@ def send_email(*, to_email: str, subject: str, body: str, purpose: str, user_id=
     smtp_port = int(current_app.config.get("SMTP_PORT", 587))
     smtp_username = (current_app.config.get("SMTP_USERNAME") or "").strip()
     smtp_password = (current_app.config.get("SMTP_PASSWORD") or "").strip()
+    from_address = current_app.config.get("GMAIL_FROM") or current_app.config.get("SMTP_FROM", "gmittendorf+VLCalendar@gmail.com")
 
     status = "logged-only"
     error_text = ""
-    if smtp_host and smtp_username and smtp_password:
-        message = EmailMessage()
-        message["Subject"] = subject
-        message["From"] = current_app.config.get("SMTP_FROM", "gmittendorf+VLCalendar@gmail.com")
-        message["To"] = to_email
-        message.set_content(body)
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = from_address
+    message["To"] = to_email
+    message.set_content(body)
+
+    gmail_result = _gmail_api_result(message)
+    if gmail_result is not None:
+        status = gmail_result["status"]
+        error_text = gmail_result["error"]
+    elif smtp_host and smtp_username and smtp_password:
         try:
             if smtp_port == 465:
                 with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:

@@ -24,16 +24,24 @@
       <section class="card admin-panel active" data-admin-panel="schedule">
         <div class="page-header">
           <div>
-            <h2>All scheduled vacation</h2>
-            <p class="subtle">Use the global request modal to add new entries for any physician.</p>
+            <h2>Scheduled vacation requests</h2>
+            <p class="subtle">Use the global request modal to add new entries for any physician. Requests that hit full days are waitlisted automatically.</p>
           </div>
         </div>
         <div id="adminRequests" class="history-list"></div>
         <div class="page-header top-gap">
           <div>
+            <h2>Waitlist</h2>
+            <p class="subtle">These requests are pending because all slots were full on one or more selected dates.</p>
+          </div>
+        </div>
+        <div id="adminWaitlist" class="history-list"></div>
+        <div class="page-header top-gap">
+          <div>
             <h2>Holiday trades</h2>
             <p class="subtle">See accepted, pending, and rejected trade requests.</p>
           </div>
+          <button id="cancelPendingTradesButton" class="secondary-button" type="button">Cancel all pending</button>
         </div>
         <div id="adminTrades" class="history-list"></div>
       </section>
@@ -42,14 +50,13 @@
         <div class="page-header">
           <div>
             <h2>User management</h2>
-            <p class="subtle">Create physicians, create admins, set annual VL limits, disable access, or update credentials.</p>
+            <p class="subtle">Create physicians, create admins, email password setup links, disable access, remove accounts, or reset passwords.</p>
           </div>
         </div>
-        <form id="userCreateForm" class="stack compact-form">
+        <form id="userCreateForm" class="stack compact-form form-grid password-validation-form">
           <label><span>Full name</span><input type="text" name="full_name" required /></label>
           <label><span>Username</span><input type="text" name="username" required /></label>
           <label><span>Email</span><input type="email" name="email" required /></label>
-          <label><span>Password</span><input type="password" name="password" required /></label>
           <label>
             <span>Role</span>
             <select name="role">
@@ -57,7 +64,27 @@
               <option value="admin">Admin</option>
             </select>
           </label>
-          <label><span>Annual VL day limit</span><input type="number" min="0" name="annual_day_limit" value="0" /></label>
+          <label>
+            <span>Password setup</span>
+            <select name="provisioning_mode" id="userProvisioningMode">
+              <option value="reset_link" selected>Email reset link</option>
+              <option value="manual_password">Set password now</option>
+              <option value="random_password">Generate password</option>
+            </select>
+          </label>
+          <label id="userCreatePasswordField" hidden>
+            <span>Password</span>
+            <input type="password" name="password" data-password-primary />
+          </label>
+          <label id="userCreateConfirmPasswordField" hidden>
+            <span>Confirm password</span>
+            <input type="password" name="confirm_password" data-password-confirm />
+          </label>
+          <div id="userCreateRandomActions" class="inline-actions" hidden>
+            <button id="generateUserPasswordButton" class="secondary-button" type="button">Generate password</button>
+            <span class="subtle">This temporary password will be emailed to the user.</span>
+          </div>
+          <div class="form-feedback hidden" data-password-feedback></div>
           <button class="primary-button" type="submit">Create user</button>
         </form>
         <div id="adminUsers" class="history-list"></div>
@@ -70,7 +97,7 @@
             <p class="subtle">These dates stay blank on the vacation calendar and reject user signups.</p>
           </div>
         </div>
-        <form id="holidayCreateForm" class="stack compact-form">
+        <form id="holidayCreateForm" class="stack compact-form form-grid">
           <label><span>Title</span><input type="text" name="title" required /></label>
           <label><span>Year</span><input type="number" min="2020" name="year" value="{{ export_year }}" required /></label>
           <label>
@@ -102,19 +129,15 @@
         <div class="page-header">
           <div>
             <h2>Audit logs</h2>
-            <p class="subtle">The activity log records high-level events. The detailed change log records field-by-field changes.</p>
+            <p class="subtle">Browse one log at a time in pages of 100 entries.</p>
           </div>
         </div>
-        <div class="two-column-grid">
-          <div>
-            <h3>Activity log</h3>
-            <div id="activityLog" class="table-list"></div>
-          </div>
-          <div>
-            <h3>Detailed change log</h3>
-            <div id="changeLog" class="table-list"></div>
-          </div>
+        <div class="admin-toggle-bar">
+          <button id="activityLogToggle" class="secondary-button admin-toggle-button active" type="button" data-log-kind="activity">Activity log</button>
+          <button id="changeLogToggle" class="secondary-button admin-toggle-button" type="button" data-log-kind="changes">Detailed change log</button>
         </div>
+        <div id="logTable" class="table-list"></div>
+        <div id="logPagination" class="pagination-bar"></div>
       </section>
 
       <section class="card admin-panel" data-admin-panel="export">
@@ -128,6 +151,16 @@
           <label class="inline-field">
             <span>Year</span>
             <input id="exportYearInput" type="number" min="2020" value="{{ export_year }}" />
+          </label>
+          <label class="inline-field">
+            <span>Display month</span>
+            <select id="exportMonthSelect">
+              <option value="0">Entire year</option>
+              {% set month_names = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] %}
+              {% for month_name in month_names %}
+                <option value="{{ loop.index }}">{{ month_name }}</option>
+              {% endfor %}
+            </select>
           </label>
           <button id="loadExportButton" class="secondary-button" type="button">Load table</button>
           <a id="downloadExportButton" class="primary-button" href="{{ url_for('api_admin_export_csv', year=export_year) }}">Download CSV</a>

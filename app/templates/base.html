@@ -3,14 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>South Bay ED Vacation Scheduler</title>
+    <title>South Bay ED VL Schedule</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
-  <body>
+  <body class="page-{{ request.endpoint or 'unknown' }}" data-theme="{{ nav_user.theme_skin if nav_user and nav_user.theme_skin else 'slate' }}">
+    {% if request.endpoint not in ['index', 'login', 'forgot_password', 'reset_password'] %}
     <header class="topbar">
       <a class="brand" href="{{ url_for('index') }}">
         <span class="brand-logo" aria-hidden="true">SB</span>
-        <span>South Bay ED Vacation Scheduler</span>
+        <span>South Bay ED VL Schedule</span>
       </a>
       <div class="top-actions">
         <button id="settingsButton" class="icon-button" type="button" aria-label="Settings">Settings</button>
@@ -30,6 +31,7 @@
         {% endif %}
       </div>
     </header>
+    {% endif %}
 
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -41,28 +43,97 @@
       {% endif %}
     {% endwith %}
 
+    <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+
     {% block body %}{% endblock %}
 
     <div id="settingsPanel" class="modal hidden" aria-hidden="true">
       <div class="modal-card settings-card">
         <div class="modal-header">
           <h2>Calendar Settings</h2>
-          <button class="icon-button" data-close-modal="settingsPanel" type="button">Close</button>
+          <button class="icon-button window-close" data-close-modal="settingsPanel" type="button" aria-label="Close">X</button>
         </div>
-        <form id="settingsForm" class="stack">
-          <label>
-            <span>Week starts on</span>
-            <select name="week_start">
-              <option value="sunday" {% if nav_user and nav_user.week_start == 'sunday' %}selected{% endif %}>Sunday</option>
-              <option value="monday" {% if nav_user and nav_user.week_start == 'monday' %}selected{% endif %}>Monday</option>
-            </select>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" name="show_week_numbers" value="true" {% if nav_user and nav_user.show_week_numbers %}checked{% endif %} />
-            <span>Show week numbers</span>
-          </label>
-          <button class="primary-button" type="submit">Save settings</button>
-        </form>
+        {% if nav_user %}
+          <div class="settings-shell">
+            <div class="settings-menu" role="tablist" aria-label="Settings sections">
+              <button
+                class="secondary-button settings-menu-button active"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                data-settings-section-button="appearance">
+                Appearance
+              </button>
+              <button
+                class="secondary-button settings-menu-button"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                data-settings-section-button="password">
+                Password
+              </button>
+            </div>
+
+            <div class="settings-content">
+              <section class="settings-section active" data-settings-section="appearance">
+                <form id="settingsForm" class="stack compact-settings-form">
+                  <div class="settings-section-copy">
+                    <h3>Appearance</h3>
+                    <p class="subtle">Choose the calendar basics and open a skin below when you want to change the palette.</p>
+                  </div>
+                  <div class="settings-inline-grid">
+                    <label>
+                      <span>Week starts on</span>
+                      <select name="week_start">
+                        <option value="sunday" {% if nav_user and nav_user.week_start == 'sunday' %}selected{% endif %}>Sunday</option>
+                        <option value="monday" {% if nav_user and nav_user.week_start == 'monday' %}selected{% endif %}>Monday</option>
+                      </select>
+                    </label>
+                    <label class="checkbox-row settings-checkbox">
+                      <input type="checkbox" name="show_week_numbers" value="true" {% if nav_user and nav_user.show_week_numbers %}checked{% endif %} />
+                      <span>Show week numbers</span>
+                    </label>
+                  </div>
+                  <fieldset class="theme-fieldset compact-theme-fieldset">
+                    <legend>Color skins</legend>
+                    <div class="theme-grid compact-theme-grid">
+                      {% for option in theme_options %}
+                        <label class="theme-option compact-theme-option"
+                          style="--theme-preview-1: {{ option.preview[0] }}; --theme-preview-2: {{ option.preview[1] }}; --theme-preview-3: {{ option.preview[2] }}; --theme-preview-4: {{ option.preview[3] }};">
+                          <input type="radio" name="theme_skin" value="{{ option.id }}" {% if nav_user and (nav_user.theme_skin or 'slate') == option.id %}checked{% endif %} />
+                          <span class="theme-option-preview" aria-hidden="true">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                          </span>
+                          <span class="theme-option-label">{{ option.label }}</span>
+                        </label>
+                      {% endfor %}
+                    </div>
+                  </fieldset>
+                  <button class="primary-button" type="submit">Save settings</button>
+                </form>
+              </section>
+
+              <section class="settings-section" data-settings-section="password" hidden>
+                <form id="settingsPasswordForm" class="stack assistant-card compact-settings-form password-validation-form">
+                  <div class="settings-section-copy">
+                    <h3>Change password</h3>
+                    <p class="subtle">Update the account password without leaving the calendar.</p>
+                  </div>
+                  <label><span>Current password</span><input type="password" name="current_password" required /></label>
+                  <label><span>New password</span><input type="password" name="new_password" data-password-primary required /></label>
+                  <label><span>Confirm new password</span><input type="password" name="confirm_password" data-password-confirm required /></label>
+                  <div class="form-feedback hidden" data-password-feedback></div>
+                  <button class="primary-button" type="submit">Update password</button>
+                </form>
+              </section>
+            </div>
+          </div>
+        {% else %}
+          <p class="subtle">Log in to change calendar settings or update your password.</p>
+        {% endif %}
       </div>
     </div>
 
@@ -71,14 +142,14 @@
         <div class="modal-header">
           <div>
             <h2 id="requestModalTitle">Schedule Vacation</h2>
-            <p class="subtle">Physicians can manage only themselves unless a delegation has been granted.</p>
+            <p class="subtle">Physicians can manage only themselves unless a delegation has been granted. Full days are added to the waitlist in entry order.</p>
           </div>
-          <button class="icon-button" data-close-modal="requestModal" type="button">Close</button>
+          <button class="icon-button window-close" data-close-modal="requestModal" type="button" aria-label="Close">X</button>
         </div>
         <div class="modal-columns">
           <form id="requestForm" class="stack">
             <input type="hidden" name="request_id" value="" />
-            <label>
+            <label id="requestPhysicianField">
               <span>Physician</span>
               <select id="requestPhysicianSelect" name="physician_id">
                 {% for physician in nav_managed_physicians %}
@@ -105,7 +176,7 @@
           </form>
 
           <form id="assistantRequestForm" class="stack assistant-card">
-            <label>
+            <label id="assistantPhysicianField">
               <span>Physician</span>
               <select id="assistantPhysicianSelect" name="physician_id">
                 {% for physician in nav_managed_physicians %}
@@ -115,11 +186,10 @@
             </label>
             <label>
               <span>Ask the assistant</span>
-              <textarea name="prompt" rows="6" placeholder="Example: Schedule Dr. Blair off July 10 through July 12 for family travel."></textarea>
+              <textarea name="prompt" rows="6" placeholder="Example: Schedule Dr. Blair off July 10 through July 12, move afifi from July 12-14 to July 19-21, or remove August 3 from my vacation."></textarea>
             </label>
             <div class="inline-actions">
-              <button id="dictateButton" class="secondary-button" type="button">Dictate</button>
-              <button class="primary-button" type="submit">Parse and schedule</button>
+              <button id="assistantSubmitButton" class="primary-button" type="submit">Add vacation</button>
             </div>
             <div id="assistantResponse" class="assistant-response subtle"></div>
           </form>
@@ -131,7 +201,7 @@
       <div class="modal-card day-modal-card">
         <div class="modal-header">
           <h2 id="dayModalTitle">Day details</h2>
-          <button class="icon-button" data-close-modal="dayModal" type="button">Close</button>
+          <button class="icon-button window-close" data-close-modal="dayModal" type="button" aria-label="Close">X</button>
         </div>
         <div id="dayModalContent" class="stack"></div>
       </div>
@@ -141,9 +211,9 @@
       <div class="modal-card">
         <div class="modal-header">
           <h2 id="userModalTitle">Edit User</h2>
-          <button class="icon-button" data-close-modal="userModal" type="button">Close</button>
+          <button class="icon-button window-close" data-close-modal="userModal" type="button" aria-label="Close">X</button>
         </div>
-        <form id="userEditForm" class="stack">
+        <form id="userEditForm" class="stack password-validation-form">
           <input type="hidden" name="user_id" value="" />
           <label><span>Full name</span><input type="text" name="full_name" required /></label>
           <label><span>Username</span><input type="text" name="username" required /></label>
@@ -155,8 +225,9 @@
               <option value="admin">Admin</option>
             </select>
           </label>
-          <label><span>Annual VL day limit</span><input type="number" min="0" name="annual_day_limit" /></label>
-          <label><span>New password</span><input type="password" name="password" placeholder="Leave blank to keep current password" /></label>
+          <label><span>Reset password</span><input type="password" name="password" data-password-primary placeholder="Leave blank to keep current password" /></label>
+          <label><span>Confirm reset password</span><input type="password" name="confirm_password" data-password-confirm placeholder="Re-enter the new password" /></label>
+          <div class="form-feedback hidden" data-password-feedback></div>
           <button class="primary-button" type="submit">Save user</button>
         </form>
       </div>
@@ -166,7 +237,7 @@
       <div class="modal-card">
         <div class="modal-header">
           <h2 id="holidayModalTitle">Edit Holiday</h2>
-          <button class="icon-button" data-close-modal="holidayModal" type="button">Close</button>
+          <button class="icon-button window-close" data-close-modal="holidayModal" type="button" aria-label="Close">X</button>
         </div>
         <form id="holidayEditForm" class="stack">
           <input type="hidden" name="holiday_id" value="" />
@@ -195,19 +266,21 @@
       <div class="game-panel">
         <div class="modal-header">
           <h2>Breakout Mode</h2>
-          <button class="icon-button" id="closeGameOverlay" type="button">Close</button>
+          <button class="icon-button window-close" id="closeGameOverlay" type="button" aria-label="Close">X</button>
         </div>
         <p class="subtle">Break the vacation cells. Move with Left and Right.</p>
         <canvas id="breakoutCanvas" width="720" height="420"></canvas>
         <div id="gameStatus" class="subtle"></div>
+        <div id="confettiLayer" class="confetti-layer" aria-hidden="true"></div>
       </div>
     </div>
 
     <script>
       window.APP_CONFIG = {
-        currentUser: {{ ({"id": nav_user.id, "username": nav_user.username, "fullName": nav_user.full_name, "email": nav_user.email, "role": nav_user.role, "weekStart": nav_user.week_start, "showWeekNumbers": nav_user.show_week_numbers, "annualDayLimit": nav_user.annual_day_limit} if nav_user else None) | tojson }},
+        currentUser: {{ ({"id": nav_user.id, "username": nav_user.username, "fullName": nav_user.full_name, "email": nav_user.email, "role": nav_user.role, "weekStart": nav_user.week_start, "showWeekNumbers": nav_user.show_week_numbers, "themeSkin": nav_user.theme_skin or 'slate', "annualDayLimit": nav_user.annual_day_limit} if nav_user else None) | tojson }},
         managedPhysicians: {{ nav_managed_physicians | tojson }},
         physicianDirectory: {{ nav_physician_directory | tojson }},
+        themeOptions: {{ theme_options | tojson }},
         rotationYears: [],
       };
     </script>

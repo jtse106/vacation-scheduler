@@ -4,29 +4,55 @@
   {% include "_sidebar.html" %}
 
   <section class="content-pane">
-    <div class="hero card">
-      <div>
-        <span class="page-kicker">Live Schedule</span>
-        <h1>Guaranteed vacation schedule</h1>
-        <p class="subtle">Protected holidays stay locked. Every scheduled VL slot appears immediately on the shared calendar.</p>
-      </div>
-      <div class="hero-actions">
-        <button id="todayButton" class="secondary-button" type="button">Today</button>
-        <button id="openRequestModalInline" class="primary-button" type="button">New vacation</button>
-      </div>
-    </div>
-
     <section class="calendar-shell card">
+      <div class="calendar-utility-bar">
+        <div class="calendar-branding">
+          <span class="page-kicker">Live Schedule</span>
+          <h1>South Bay ED VL Schedule</h1>
+        </div>
+        <div class="hero-actions">
+          <button id="openRequestModalInline" class="primary-button" type="button">Schedule</button>
+          <button id="todayButton" class="secondary-button" type="button">Today</button>
+          {% if nav_user %}
+            <button id="settingsButton" class="secondary-button" type="button">Settings</button>
+            <a class="user-chip" href="{{ url_for('history') }}">
+              <span class="avatar">{{ nav_user.full_name[0] }}</span>
+              <span>{{ nav_user.username }}</span>
+            </a>
+            <form method="post" action="{{ url_for('logout') }}">
+              <button class="text-button" type="submit">Log out</button>
+            </form>
+          {% else %}
+            <a class="user-chip" href="{{ url_for('login') }}">
+              <span class="avatar">?</span>
+              <span>Log in</span>
+            </a>
+          {% endif %}
+        </div>
+      </div>
       <div class="calendar-header">
+        <div class="calendar-heading-row calendar-title-wrap">
+          <h1 id="calendarTitle">{{ month_name }} {{ current_year }}</h1>
+          <p class="subtle">{% if nav_user and nav_user.role == 'physician' %}Click or drag across days to select your range, then press Enter or use the toolbar to assign it to yourself.{% else %}Tap a day to see physicians already scheduled off.{% endif %}</p>
+        </div>
         <div class="calendar-nav">
           <button id="prevMonth" class="icon-button" type="button"><</button>
           <button id="nextMonth" class="icon-button" type="button">></button>
         </div>
-        <div class="calendar-title-wrap">
-          <h1 id="calendarTitle">{{ month_name }} {{ current_year }}</h1>
-          <p class="subtle">Tap a day to see physicians already scheduled off.</p>
-        </div>
       </div>
+      {% if nav_user and nav_user.role == 'physician' %}
+        <div id="selectionToolbar" class="selection-toolbar hidden" aria-hidden="true">
+          <div>
+            <strong id="selectionLabel">No dates selected</strong>
+            <p class="subtle">Drag across dates to select a range. Use Delete or Backspace to unassign yourself from the selected dates.</p>
+          </div>
+          <div class="inline-actions">
+            <button id="assignSelectionButton" class="primary-button" type="button">Assign me</button>
+            <button id="unassignSelectionButton" class="secondary-button" type="button">Unassign me</button>
+            <button id="clearSelectionButton" class="secondary-button" type="button">Clear</button>
+          </div>
+        </div>
+      {% endif %}
       <div id="calendarMount"
         data-year="{{ current_year }}"
         data-month="{{ current_month }}"

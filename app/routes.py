@@ -36,12 +36,16 @@ from .db import (
     physician_directory,
     query_db,
     record_activity,
+    requests_for_day,
+    requests_overlapping_range,
     validate_request_window,
     verify_password,
+    waitlist_counts_for_month,
 )
 from .legacy_calendar import legacy_calendar_for_year, legacy_calendar_years, legacy_documents
 from .llm import explain_conflict_naturally, parse_natural_language_request
 from .mailer import send_email
+from .themes import THEME_CHOICES, theme_options_payload
 
 
 MAJOR_HOLIDAYS = ["thanksgiving", "christmas", "new_years"]
@@ -54,7 +58,7 @@ def current_user():
         return None
     return query_db(
         """
-        SELECT u.*, s.week_start, s.show_week_numbers
+        SELECT u.*, s.week_start, s.show_week_numbers, s.theme_skin
         FROM users u
         LEFT JOIN user_settings s ON s.user_id = u.id
         WHERE u.id = ? AND u.is_active = 1 AND u.deleted_at IS NULL
@@ -116,6 +120,7 @@ def _current_user_payload():
         "role": user["role"],
         "weekStart": user["week_start"],
         "showWeekNumbers": bool(user["show_week_numbers"]),
+        "themeSkin": user["theme_skin"] or "slate",
         "annualDayLimit": user["annual_day_limit"],
     }
 
@@ -142,6 +147,7 @@ def build_month_payload(year: int, month: int, week_start: str, show_week_number
     max_slots = current_app.config["MAX_DAILY_VACATION_SLOTS"]
     today = date.today().isoformat()
     holiday_lookup = holiday_map_for_month(year, month)
+    waitlist_lookup = waitlist_counts_for_month(year, month)
     for week in cal.monthdatescalendar(year, month):
         week_payload = []
         for day in week:
@@ -166,6 +172,7 @@ def build_month_payload(year: int, month: int, week_start: str, show_week_number
                     "isToday": day_iso == today,
                     "isHoliday": bool(holiday),
                     "holiday": holiday,
+                    "waitlistCount": waitlist_lookup.get(day_iso, 0),
                     "slots": slots,
                 }
             )
@@ -189,6 +196,7 @@ def serialize_request(row):
         "endDate": row["end_date"],
         "status": row["status"],
         "note": row["request_note"] or "",
+        "decisionNote": row["decision_note"] or "",
         "sourceType": row["source_type"],
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
@@ -232,6 +240,41 @@ def serialize_delegation(row):
     }
 
 
+def _issue_password_reset_token(user_id: int, *, lifetime_hours: int = 2):
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.utcnow() + timedelta(hours=lifetime_hours)).isoformat(timespec="seconds")
+    execute_db(
+        """
+        INSERT INTO password_reset_tokens (user_id, token, expires_at, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (user_id, token, expires_at, iso_now()),
+    )
+    return token, expires_at
+
+
+def _generate_temporary_password(length: int = 14):
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _prompt_mentions_unauthorized_physician(actor, prompt_text: str, managed_physicians: list[dict]):
+    if not actor or actor["role"] == "admin" or not prompt_text:
+        return None
+    managed_ids = {item["id"] for item in managed_physicians}
+    prompt_lower = f" {prompt_text.lower()} "
+    for physician in physician_directory():
+        if physician["id"] in managed_ids:
+            continue
+        username = physician["username"].lower()
+        full_name = " ".join(physician["full_name"].lower().split())
+        if re.search(rf"(?<![\w@]){re.escape(username)}(?![\w@])", prompt_lower):
+            return physician
+        if full_name and f" {full_name} " in prompt_lower:
+            return physician
+    return None
+
+
 def serialize_trade(row):
     return {
         "id": row["id"],
@@ -254,6 +297,16 @@ def serialize_trade(row):
 def _rotation_years():
     years = query_db("SELECT DISTINCT year FROM holiday_rotation_assignments ORDER BY year ASC")
     return [row["year"] for row in years]
+
+
+def _default_selected_year(years: list[int]):
+    current_year = date.today().year
+    if current_year in years:
+        return current_year
+    future_years = [year for year in years if year >= current_year]
+    if future_years:
+        return future_years[0]
+    return years[-1] if years else current_year
 
 
 def _rotation_view_model(selected_year: int):
@@ -410,6 +463,182 @@ def _export_matrix(year: int):
     return {"year": year, "dates": dates, "rows": matrix}
 
 
+def _request_row(request_id: int):
+    return query_db(
+        """
+        SELECT vr.*, COALESCE(vr.request_display_name, u.full_name) AS full_name, u.username, u.email,
+               actor.full_name AS created_by_name
+        FROM vacation_requests vr
+        LEFT JOIN users u ON u.id = vr.user_id
+        LEFT JOIN users actor ON actor.id = vr.created_by_user_id
+        WHERE vr.id = ?
+        """,
+        (request_id,),
+        one=True,
+    )
+
+
+def _waitlist_decision_note(full_days: list[str]):
+    preview = ", ".join(full_days[:5])
+    suffix = "..." if len(full_days) > 5 else ""
+    return f"Waitlisted because all vacation slots were filled for: {preview}{suffix}"
+
+
+def _resolve_request_status(user_id: int, start_date: str, end_date: str, *, exclude_request_id: int | None = None):
+    validation = validate_request_window(
+        user_id,
+        start_date,
+        end_date,
+        exclude_request_id=exclude_request_id,
+        allow_full_days=True,
+    )
+    if validation["full_days"]:
+        return {"status": "waitlisted", "decision_note": _waitlist_decision_note(validation["full_days"])}
+    return {"status": "scheduled", "decision_note": ""}
+
+
+def _promote_waitlisted_requests():
+    promoted = []
+    rows = query_db(
+        """
+        SELECT vr.*, COALESCE(vr.request_display_name, u.full_name) AS full_name, u.username, u.email
+        FROM vacation_requests vr
+        JOIN users u ON u.id = vr.user_id
+        WHERE vr.status = 'waitlisted'
+        ORDER BY vr.created_at ASC, vr.id ASC
+        """
+    )
+    for row in rows:
+        try:
+            validate_request_window(row["user_id"], row["start_date"], row["end_date"], exclude_request_id=row["id"])
+        except ValueError:
+            continue
+        now = iso_now()
+        decision_note = "Promoted automatically from the waitlist when space became available."
+        execute_db(
+            """
+            UPDATE vacation_requests
+            SET status = 'scheduled', decision_note = ?, processed_at = ?, updated_at = ?, updated_by_user_id = NULL
+            WHERE id = ?
+            """,
+            (decision_note, now, now, row["id"]),
+        )
+        send_email(
+            to_email=row["email"],
+            subject="Vacation waitlist promoted",
+            body=(
+                f"Hello {row['full_name']},\n\n"
+                f"Your waitlisted vacation from {row['start_date']} to {row['end_date']} is now scheduled.\n"
+                "A slot opened and the scheduler promoted your request automatically."
+            ),
+            purpose="waitlist-promoted",
+            user_id=row["user_id"],
+            request_id=row["id"],
+        )
+        record_activity(
+            None,
+            "waitlist-promoted",
+            f"{row['full_name']} was promoted from the waitlist for {row['start_date']} to {row['end_date']}.",
+            "vacation_request",
+            row["id"],
+            changes=[
+                {"field_name": "status", "old_value": "waitlisted", "new_value": "scheduled"},
+                {"field_name": "decision_note", "old_value": row["decision_note"] or "", "new_value": decision_note},
+            ],
+        )
+        promoted.append(row["id"])
+    return promoted
+
+
+def _remove_range_from_requests(actor, target_user_id: int, start_date: str, end_date: str):
+    rows = requests_overlapping_range(target_user_id, start_date, end_date)
+    if not rows:
+        return {"affectedCount": 0, "message": "No vacation entries overlapped that selection."}
+
+    db = get_db()
+    now = iso_now()
+    affected_count = 0
+    for row in rows:
+        overlap_start = max(start_date, row["start_date"])
+        overlap_end = min(end_date, row["end_date"])
+        if overlap_start > overlap_end:
+            continue
+        affected_count += 1
+        if overlap_start == row["start_date"] and overlap_end == row["end_date"]:
+            db.execute(
+                """
+                UPDATE vacation_requests
+                SET status = 'canceled', decision_note = ?, canceled_at = ?, canceled_by_user_id = ?, updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?
+                """,
+                (f"Removed {overlap_start} to {overlap_end} from the schedule.", now, actor["id"], now, actor["id"], row["id"]),
+            )
+        elif overlap_start == row["start_date"]:
+            db.execute(
+                """
+                UPDATE vacation_requests
+                SET start_date = ?, decision_note = ?, updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?
+                """,
+                ((date.fromisoformat(overlap_end) + timedelta(days=1)).isoformat(), f"Removed {overlap_start} to {overlap_end} from the selected range.", now, actor["id"], row["id"]),
+            )
+        elif overlap_end == row["end_date"]:
+            db.execute(
+                """
+                UPDATE vacation_requests
+                SET end_date = ?, decision_note = ?, updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?
+                """,
+                ((date.fromisoformat(overlap_start) - timedelta(days=1)).isoformat(), f"Removed {overlap_start} to {overlap_end} from the selected range.", now, actor["id"], row["id"]),
+            )
+        else:
+            leading_end = (date.fromisoformat(overlap_start) - timedelta(days=1)).isoformat()
+            trailing_start = (date.fromisoformat(overlap_end) + timedelta(days=1)).isoformat()
+            db.execute(
+                """
+                UPDATE vacation_requests
+                SET end_date = ?, decision_note = ?, updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?
+                """,
+                (leading_end, f"Removed {overlap_start} to {overlap_end} from the selected range.", now, actor["id"], row["id"]),
+            )
+            db.execute(
+                """
+                INSERT INTO vacation_requests
+                (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, source_prompt, source_response,
+                 decision_note, created_at, updated_at, updated_by_user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["user_id"],
+                    row["created_by_user_id"],
+                    row["request_display_name"],
+                    trailing_start,
+                    row["end_date"],
+                    row["status"],
+                    row["request_note"],
+                    row["source_type"],
+                    row["source_prompt"],
+                    row["source_response"],
+                    f"Split automatically after removing {overlap_start} to {overlap_end}.",
+                    now,
+                    now,
+                    actor["id"],
+                ),
+            )
+        record_activity(
+            actor["id"],
+            "vacation-range-removed",
+            f"{actor['full_name']} removed {overlap_start} to {overlap_end} from vacation entry #{row['id']}.",
+            "vacation_request",
+            row["id"],
+            changes=[{"field_name": "removed_range", "old_value": f"{overlap_start} to {overlap_end}", "new_value": None}],
+        )
+    db.commit()
+    _promote_waitlisted_requests()
+    return {"affectedCount": affected_count, "message": f"Removed the selected range from {affected_count} vacation entr{'y' if affected_count == 1 else 'ies'}."}
+
+
 def register_routes(app):
     @app.context_processor
     def inject_user():
@@ -417,6 +646,7 @@ def register_routes(app):
             "nav_user": current_user(),
             "nav_managed_physicians": _manageable_physicians_payload(),
             "nav_physician_directory": _physician_directory_payload(),
+            "theme_options": theme_options_payload(),
         }
 
     @app.route("/")
@@ -442,7 +672,7 @@ def register_routes(app):
             password = request.form.get("password", "")
             user = query_db(
                 """
-                SELECT u.*, s.week_start, s.show_week_numbers
+                SELECT u.*, s.week_start, s.show_week_numbers, s.theme_skin
                 FROM users u
                 LEFT JOIN user_settings s ON s.user_id = u.id
                 WHERE u.username = ? AND u.is_active = 1 AND u.deleted_at IS NULL
@@ -471,22 +701,14 @@ def register_routes(app):
                 one=True,
             )
             if user:
-                token = secrets.token_urlsafe(32)
-                expires_at = (datetime.utcnow() + timedelta(hours=2)).isoformat(timespec="seconds")
-                execute_db(
-                    """
-                    INSERT INTO password_reset_tokens (user_id, token, expires_at, created_at)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (user["id"], token, expires_at, iso_now()),
-                )
+                token, _ = _issue_password_reset_token(user["id"], lifetime_hours=2)
                 reset_link = url_for("reset_password", token=token, _external=True)
                 send_email(
                     to_email=user["email"],
-                    subject="Vacation Scheduler password reset",
+                    subject="South Bay ED VL Schedule password reset",
                     body=(
                         f"Hello {user['full_name']},\n\n"
-                        "A password reset was requested for your Vacation Scheduler account.\n"
+                        "A password reset was requested for your South Bay ED VL Schedule account.\n"
                         f"Use this link to reset your password: {reset_link}\n\n"
                         "If you did not request this, you can ignore this email."
                     ),
@@ -546,7 +768,7 @@ def register_routes(app):
     @app.post("/logout")
     def logout():
         session.clear()
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     @app.route("/history")
     @login_required
@@ -556,9 +778,9 @@ def register_routes(app):
     @app.route("/holiday-rotation")
     def holiday_rotation():
         years = _rotation_years()
-        selected_year = _parse_int(request.args.get("year"), years[-1] if years else date.today().year)
+        selected_year = _parse_int(request.args.get("year"), _default_selected_year(years))
         if years and selected_year not in years:
-            selected_year = years[-1]
+            selected_year = _default_selected_year(years)
         return render_template(
             "holiday_rotation.html",
             rotation_years=years,
@@ -647,22 +869,43 @@ def register_routes(app):
 
     @app.get("/api/day/<day_iso>")
     def api_day_details(day_iso: str):
+        actor = current_user()
         holiday = holiday_for_day(day_iso)
-        rows = overlapping_requests(day_iso)
+        scheduled_rows = requests_for_day(day_iso, statuses=("scheduled",))
+        waitlisted_rows = requests_for_day(day_iso, statuses=("waitlisted",))
         return jsonify(
             {
                 "date": day_iso,
                 "holiday": serialize_holiday(holiday) if holiday else None,
                 "requests": [
                     {
+                        "requestId": row["id"],
+                        "physicianId": row["user_id"],
                         "physician": row["full_name"],
                         "username": row["username"],
                         "requestedBy": row["created_by_name"] or row["full_name"],
                         "startDate": row["start_date"],
                         "endDate": row["end_date"],
                         "status": row["status"],
+                        "note": row["request_note"] or "",
+                        "canManage": can_manage_request(actor, row),
                     }
-                    for row in rows
+                    for row in scheduled_rows
+                ],
+                "waitlistRequests": [
+                    {
+                        "requestId": row["id"],
+                        "physicianId": row["user_id"],
+                        "physician": row["full_name"],
+                        "username": row["username"],
+                        "requestedBy": row["created_by_name"] or row["full_name"],
+                        "startDate": row["start_date"],
+                        "endDate": row["end_date"],
+                        "status": row["status"],
+                        "note": row["request_note"] or "",
+                        "canManage": can_manage_request(actor, row),
+                    }
+                    for row in waitlisted_rows
                 ],
             }
         )
@@ -673,6 +916,17 @@ def register_routes(app):
         actor = current_user()
         rows = _requests_for_managed_physicians(actor)
         return jsonify({"requests": [serialize_request(row) for row in rows]})
+
+    @app.get("/api/requests/<int:request_id>")
+    @login_required
+    def api_request_detail(request_id: int):
+        actor = current_user()
+        row = _request_row(request_id)
+        if not row:
+            abort(404)
+        if not can_manage_request(actor, row):
+            return jsonify({"error": "You cannot view that vacation entry."}), 403
+        return jsonify({"request": serialize_request(row)})
 
     @app.post("/api/requests")
     @login_required
@@ -686,7 +940,7 @@ def register_routes(app):
         end_date = request.form.get("end_date", "").strip()
         note = request.form.get("request_note", "").strip()
         try:
-            validate_request_window(target_user_id, start_date, end_date)
+            resolution = _resolve_request_status(target_user_id, start_date, end_date)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
@@ -694,15 +948,30 @@ def register_routes(app):
         request_id = execute_db(
             """
             INSERT INTO vacation_requests
-            (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'scheduled', ?, 'manual', ?, ?)
+            (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, decision_note, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?)
             """,
-            (target_user_id, actor["id"], target_user["full_name"], start_date, end_date, note, iso_now(), iso_now()),
+            (
+                target_user_id,
+                actor["id"],
+                target_user["full_name"],
+                start_date,
+                end_date,
+                resolution["status"],
+                note,
+                resolution["decision_note"],
+                iso_now(),
+                iso_now(),
+            ),
         )
         record_activity(
             actor["id"],
-            "vacation-created",
-            f"{actor['full_name']} scheduled vacation for {target_user['full_name']} from {start_date} to {end_date}.",
+            "vacation-created" if resolution["status"] == "scheduled" else "vacation-waitlisted",
+            (
+                f"{actor['full_name']} scheduled vacation for {target_user['full_name']} from {start_date} to {end_date}."
+                if resolution["status"] == "scheduled"
+                else f"{actor['full_name']} waitlisted vacation for {target_user['full_name']} from {start_date} to {end_date}."
+            ),
             "vacation_request",
             request_id,
             changes=[
@@ -710,100 +979,288 @@ def register_routes(app):
                 {"field_name": "start_date", "old_value": None, "new_value": start_date},
                 {"field_name": "end_date", "old_value": None, "new_value": end_date},
                 {"field_name": "request_note", "old_value": None, "new_value": note},
+                {"field_name": "status", "old_value": None, "new_value": resolution["status"]},
+                {"field_name": "decision_note", "old_value": None, "new_value": resolution["decision_note"]},
             ],
         )
-        row = query_db(
-            """
-            SELECT vr.*, COALESCE(vr.request_display_name, u.full_name) AS full_name, u.username, u.email,
-                   actor.full_name AS created_by_name
-            FROM vacation_requests vr
-            LEFT JOIN users u ON u.id = vr.user_id
-            LEFT JOIN users actor ON actor.id = vr.created_by_user_id
-            WHERE vr.id = ?
-            """,
-            (request_id,),
-            one=True,
+        row = _request_row(request_id)
+        return jsonify(
+            {
+                "request": serialize_request(row),
+                "message": "Vacation scheduled." if resolution["status"] == "scheduled" else resolution["decision_note"],
+            }
         )
-        return jsonify({"request": serialize_request(row)})
+
+    def _record_assistant_failure(actor, event_type: str, message: str, prompt_text: str, *, selected_physician_id=None, entity_id=None, parsed=None, error=None, extra_changes=None):
+        changes = [
+            {"field_name": "source_prompt", "old_value": None, "new_value": prompt_text},
+            {"field_name": "selected_physician_id", "old_value": None, "new_value": selected_physician_id},
+        ]
+        if parsed is not None:
+            changes.append({"field_name": "parsed_payload", "old_value": None, "new_value": str(parsed)})
+        if error is not None:
+            changes.append({"field_name": "error", "old_value": None, "new_value": str(error)})
+        if extra_changes:
+            changes.extend(extra_changes)
+        record_activity(actor["id"], event_type, message, "vacation_request", entity_id, changes=changes)
 
     @app.post("/api/requests/assistant")
     @login_required
     def api_assistant_request():
         actor = current_user()
         selected_user_id = _parse_int(request.form.get("physician_id"))
+        if selected_user_id and not can_manage_physician(actor, selected_user_id):
+            return jsonify({"error": "You do not have permission to add vacation for that physician. Ask them to delegate scheduling access first."}), 403
         managed = _manageable_physicians_payload()
         if not managed:
             return jsonify({"error": "No physicians are available for this account."}), 400
         default_physician = next((item for item in managed if item["id"] == selected_user_id), managed[0])
         prompt_text = request.form.get("prompt", "").strip()
+        unauthorized_physician = _prompt_mentions_unauthorized_physician(actor, prompt_text, managed)
+        if unauthorized_physician:
+            message = (
+                f"You do not have permission to add vacation for {unauthorized_physician['full_name']}. "
+                "Ask them to delegate scheduling access first."
+            )
+            _record_assistant_failure(
+                actor,
+                "assistant-request-permission-denied",
+                f"Assistant request referenced unauthorized physician {unauthorized_physician['username']}.",
+                prompt_text,
+                selected_physician_id=selected_user_id or default_physician["id"],
+                extra_changes=[
+                    {"field_name": "attempted_physician_id", "old_value": None, "new_value": unauthorized_physician["id"]},
+                ],
+            )
+            return jsonify({"error": message}), 403
+        existing_requests = [serialize_request(row) for row in _requests_for_managed_physicians(actor)]
 
         try:
-            parsed = parse_natural_language_request(prompt_text, managed, default_physician)
+            parsed = parse_natural_language_request(prompt_text, managed, default_physician, existing_requests)
         except ValueError as exc:
+            _record_assistant_failure(
+                actor,
+                "assistant-request-parse-failed",
+                f"Assistant request failed for {default_physician['fullName']}: {exc}",
+                prompt_text,
+                selected_physician_id=default_physician["id"],
+                error=exc,
+            )
             return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            current_app.logger.exception("Assistant request crashed during parsing.")
+            _record_assistant_failure(
+                actor,
+                "assistant-request-system-error",
+                f"Assistant request crashed for {default_physician['fullName']}: {exc}",
+                prompt_text,
+                selected_physician_id=default_physician["id"],
+                error=exc,
+            )
+            return jsonify({"error": "The assistant request failed unexpectedly. Review the detailed admin log and try again."}), 500
 
         if not can_manage_physician(actor, parsed["physicianId"]):
-            return jsonify({"error": "The assistant selected a physician you are not allowed to manage."}), 400
+            _record_assistant_failure(
+                actor,
+                "assistant-request-permission-denied",
+                f"Assistant request attempted to manage unauthorized physician #{parsed['physicianId']}.",
+                prompt_text,
+                selected_physician_id=selected_user_id or default_physician["id"],
+                parsed=parsed,
+                extra_changes=[
+                    {"field_name": "attempted_physician_id", "old_value": None, "new_value": parsed["physicianId"]},
+                ],
+            )
+            return jsonify({"error": "You do not have permission to add vacation for that physician. Ask them to delegate scheduling access first.", "parsed": parsed}), 403
 
-        try:
-            validate_request_window(parsed["physicianId"], parsed["startDate"], parsed["endDate"])
-        except ValueError as exc:
-            message = explain_conflict_naturally(prompt_text, str(exc))
+        action = parsed["action"]
+        if action == "create":
+            try:
+                resolution = _resolve_request_status(parsed["physicianId"], parsed["startDate"], parsed["endDate"])
+            except ValueError as exc:
+                message = explain_conflict_naturally(prompt_text, str(exc))
+                record_activity(
+                    actor["id"],
+                    "assistant-request-blocked",
+                    f"Assistant request blocked for {parsed['physicianName']}: {exc}",
+                    "vacation_request",
+                    None,
+                    changes=[
+                        {"field_name": "source_prompt", "old_value": None, "new_value": prompt_text},
+                        {"field_name": "physician_id", "old_value": None, "new_value": parsed["physicianId"]},
+                        {"field_name": "start_date", "old_value": None, "new_value": parsed["startDate"]},
+                        {"field_name": "end_date", "old_value": None, "new_value": parsed["endDate"]},
+                        {"field_name": "error", "old_value": None, "new_value": str(exc)},
+                    ],
+                )
+                return jsonify({"error": message, "parsed": parsed}), 400
+
+            target_user = query_db("SELECT * FROM users WHERE id = ?", (parsed["physicianId"],), one=True)
+            request_id = execute_db(
+                """
+                INSERT INTO vacation_requests
+                (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, source_prompt, source_response, decision_note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'assistant', ?, ?, ?, ?, ?)
+                """,
+                (
+                    parsed["physicianId"],
+                    actor["id"],
+                    target_user["full_name"],
+                    parsed["startDate"],
+                    parsed["endDate"],
+                    resolution["status"],
+                    parsed["note"],
+                    prompt_text,
+                    parsed["explanation"],
+                    resolution["decision_note"],
+                    iso_now(),
+                    iso_now(),
+                ),
+            )
             record_activity(
                 actor["id"],
-                "assistant-request-blocked",
-                f"Assistant request blocked for {parsed['physicianName']}: {exc}",
+                "assistant-request-created" if resolution["status"] == "scheduled" else "assistant-request-waitlisted",
+                (
+                    f"Assistant scheduled vacation for {target_user['full_name']} from {parsed['startDate']} to {parsed['endDate']}."
+                    if resolution["status"] == "scheduled"
+                    else f"Assistant waitlisted vacation for {target_user['full_name']} from {parsed['startDate']} to {parsed['endDate']}."
+                ),
                 "vacation_request",
-                None,
+                request_id,
+                changes=[
+                    {"field_name": "source_type", "old_value": None, "new_value": "assistant"},
+                    {"field_name": "source_prompt", "old_value": None, "new_value": prompt_text},
+                    {"field_name": "start_date", "old_value": None, "new_value": parsed["startDate"]},
+                    {"field_name": "end_date", "old_value": None, "new_value": parsed["endDate"]},
+                    {"field_name": "status", "old_value": None, "new_value": resolution["status"]},
+                    {"field_name": "decision_note", "old_value": None, "new_value": resolution["decision_note"]},
+                ],
             )
-            return jsonify({"error": message, "parsed": parsed}), 400
+            row = _request_row(request_id)
+            return jsonify(
+                {
+                    "request": serialize_request(row),
+                    "parsed": parsed | {"explanation": resolution["decision_note"] or parsed["explanation"]},
+                    "message": "Vacation scheduled." if resolution["status"] == "scheduled" else resolution["decision_note"],
+                }
+            )
 
-        target_user = query_db("SELECT * FROM users WHERE id = ?", (parsed["physicianId"],), one=True)
-        request_id = execute_db(
-            """
-            INSERT INTO vacation_requests
-            (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, source_prompt, source_response, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'scheduled', ?, 'assistant', ?, ?, ?, ?)
-            """,
-            (
-                parsed["physicianId"],
+        request_row = _request_row(parsed["requestId"])
+        if not request_row:
+            return jsonify({"error": "The assistant selected a vacation entry that no longer exists.", "parsed": parsed}), 400
+        if not can_manage_request(actor, request_row):
+            return jsonify({"error": "You cannot manage that vacation entry.", "parsed": parsed}), 403
+
+        if action == "update":
+            target_user_id = parsed["physicianId"] or request_row["user_id"]
+            if not can_manage_physician(actor, target_user_id):
+                return jsonify({"error": "You cannot move that vacation entry to the selected physician.", "parsed": parsed}), 403
+            try:
+                resolution = _resolve_request_status(target_user_id, parsed["startDate"], parsed["endDate"], exclude_request_id=request_row["id"])
+            except ValueError as exc:
+                message = explain_conflict_naturally(prompt_text, str(exc))
+                record_activity(
+                    actor["id"],
+                    "assistant-request-blocked",
+                    f"Assistant update blocked for request #{request_row['id']}: {exc}",
+                    "vacation_request",
+                    request_row["id"],
+                    changes=[
+                        {"field_name": "source_prompt", "old_value": request_row["source_prompt"] or "", "new_value": prompt_text},
+                        {"field_name": "start_date", "old_value": request_row["start_date"], "new_value": parsed["startDate"]},
+                        {"field_name": "end_date", "old_value": request_row["end_date"], "new_value": parsed["endDate"]},
+                        {"field_name": "error", "old_value": None, "new_value": str(exc)},
+                    ],
+                )
+                return jsonify({"error": message, "parsed": parsed}), 400
+
+            target_user = query_db("SELECT * FROM users WHERE id = ?", (target_user_id,), one=True)
+            db = get_db()
+            db.execute(
+                """
+                UPDATE vacation_requests
+                SET user_id = ?, request_display_name = ?, start_date = ?, end_date = ?, status = ?, request_note = ?, source_type = 'assistant',
+                    source_prompt = ?, source_response = ?, decision_note = ?, canceled_at = NULL, canceled_by_user_id = NULL,
+                    updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?
+                """,
+                (
+                    target_user_id,
+                    target_user["full_name"],
+                    parsed["startDate"],
+                    parsed["endDate"],
+                    resolution["status"],
+                    parsed["note"],
+                    prompt_text,
+                    parsed["explanation"],
+                    resolution["decision_note"],
+                    iso_now(),
+                    actor["id"],
+                    request_row["id"],
+                ),
+            )
+            db.commit()
+            _promote_waitlisted_requests()
+            record_activity(
                 actor["id"],
-                target_user["full_name"],
-                parsed["startDate"],
-                parsed["endDate"],
-                parsed["note"],
-                prompt_text,
-                parsed["explanation"],
-                iso_now(),
-                iso_now(),
-            ),
-        )
-        record_activity(
-            actor["id"],
-            "assistant-request-created",
-            f"Assistant scheduled vacation for {target_user['full_name']} from {parsed['startDate']} to {parsed['endDate']}.",
-            "vacation_request",
-            request_id,
-            changes=[
-                {"field_name": "source_type", "old_value": None, "new_value": "assistant"},
-                {"field_name": "source_prompt", "old_value": None, "new_value": prompt_text},
-                {"field_name": "start_date", "old_value": None, "new_value": parsed["startDate"]},
-                {"field_name": "end_date", "old_value": None, "new_value": parsed["endDate"]},
-            ],
-        )
-        row = query_db(
-            """
-            SELECT vr.*, COALESCE(vr.request_display_name, u.full_name) AS full_name, u.username, u.email,
-                   actor.full_name AS created_by_name
-            FROM vacation_requests vr
-            LEFT JOIN users u ON u.id = vr.user_id
-            LEFT JOIN users actor ON actor.id = vr.created_by_user_id
-            WHERE vr.id = ?
-            """,
-            (request_id,),
-            one=True,
-        )
-        return jsonify({"request": serialize_request(row), "parsed": parsed})
+                "assistant-request-updated",
+                f"Assistant updated vacation entry #{request_row['id']}.",
+                "vacation_request",
+                request_row["id"],
+                changes=[
+                    {"field_name": "start_date", "old_value": request_row["start_date"], "new_value": parsed["startDate"]},
+                    {"field_name": "end_date", "old_value": request_row["end_date"], "new_value": parsed["endDate"]},
+                    {"field_name": "status", "old_value": request_row["status"], "new_value": resolution["status"]},
+                    {"field_name": "source_prompt", "old_value": request_row["source_prompt"] or "", "new_value": prompt_text},
+                ],
+            )
+            row = _request_row(request_row["id"])
+            return jsonify(
+                {
+                    "request": serialize_request(row),
+                    "parsed": parsed | {"explanation": resolution["decision_note"] or parsed["explanation"]},
+                    "message": "Vacation updated." if resolution["status"] == "scheduled" else resolution["decision_note"],
+                }
+            )
+
+        if action == "cancel":
+            if request_row["status"] != "canceled":
+                execute_db(
+                    """
+                    UPDATE vacation_requests
+                    SET status = 'canceled', decision_note = ?, canceled_at = ?, canceled_by_user_id = ?, updated_at = ?, updated_by_user_id = ?
+                    WHERE id = ?
+                    """,
+                    ("Canceled by assistant instruction.", iso_now(), actor["id"], iso_now(), actor["id"], request_row["id"]),
+                )
+                record_activity(
+                    actor["id"],
+                    "assistant-request-canceled",
+                    f"Assistant canceled vacation entry #{request_row['id']}.",
+                    "vacation_request",
+                    request_row["id"],
+                    changes=[{"field_name": "status", "old_value": request_row["status"], "new_value": "canceled"}],
+                )
+                _promote_waitlisted_requests()
+            return jsonify({"ok": True, "parsed": parsed, "message": "Vacation removed."})
+
+        if action == "remove_days":
+            result = _remove_range_from_requests(actor, request_row["user_id"], parsed["removeStartDate"], parsed["removeEndDate"])
+            record_activity(
+                actor["id"],
+                "assistant-request-range-removed",
+                f"Assistant removed {parsed['removeStartDate']} to {parsed['removeEndDate']} from request #{request_row['id']}.",
+                "vacation_request",
+                request_row["id"],
+                changes=[
+                    {"field_name": "source_prompt", "old_value": request_row["source_prompt"] or "", "new_value": prompt_text},
+                    {"field_name": "remove_start_date", "old_value": None, "new_value": parsed["removeStartDate"]},
+                    {"field_name": "remove_end_date", "old_value": None, "new_value": parsed["removeEndDate"]},
+                ],
+            )
+            return jsonify({"ok": True, "parsed": parsed, "message": result["message"]})
+
+        return jsonify({"error": "The assistant returned an unsupported action.", "parsed": parsed}), 400
 
     @app.post("/api/requests/<int:request_id>")
     @login_required
@@ -832,7 +1289,7 @@ def register_routes(app):
         end_date = request.form.get("end_date", "").strip()
         note = request.form.get("request_note", "").strip()
         try:
-            validate_request_window(target_user_id, start_date, end_date, exclude_request_id=request_id)
+            resolution = _resolve_request_status(target_user_id, start_date, end_date, exclude_request_id=request_id)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
@@ -841,12 +1298,25 @@ def register_routes(app):
         db.execute(
             """
             UPDATE vacation_requests
-            SET user_id = ?, request_display_name = ?, start_date = ?, end_date = ?, request_note = ?, updated_at = ?, updated_by_user_id = ?
+            SET user_id = ?, request_display_name = ?, start_date = ?, end_date = ?, status = ?, request_note = ?, decision_note = ?,
+                canceled_at = NULL, canceled_by_user_id = NULL, updated_at = ?, updated_by_user_id = ?
             WHERE id = ?
             """,
-            (target_user_id, target_user["full_name"], start_date, end_date, note, iso_now(), actor["id"], request_id),
+            (
+                target_user_id,
+                target_user["full_name"],
+                start_date,
+                end_date,
+                resolution["status"],
+                note,
+                resolution["decision_note"],
+                iso_now(),
+                actor["id"],
+                request_id,
+            ),
         )
         db.commit()
+        _promote_waitlisted_requests()
         changes = []
         if row["user_id"] != target_user_id:
             changes.append({"field_name": "user_id", "old_value": row["user_id"], "new_value": target_user_id})
@@ -854,8 +1324,12 @@ def register_routes(app):
             changes.append({"field_name": "start_date", "old_value": row["start_date"], "new_value": start_date})
         if row["end_date"] != end_date:
             changes.append({"field_name": "end_date", "old_value": row["end_date"], "new_value": end_date})
+        if row["status"] != resolution["status"]:
+            changes.append({"field_name": "status", "old_value": row["status"], "new_value": resolution["status"]})
         if (row["request_note"] or "") != note:
             changes.append({"field_name": "request_note", "old_value": row["request_note"] or "", "new_value": note})
+        if (row["decision_note"] or "") != resolution["decision_note"]:
+            changes.append({"field_name": "decision_note", "old_value": row["decision_note"] or "", "new_value": resolution["decision_note"]})
         record_activity(
             actor["id"],
             "vacation-updated",
@@ -864,19 +1338,13 @@ def register_routes(app):
             request_id,
             changes=changes,
         )
-        refreshed = query_db(
-            """
-            SELECT vr.*, COALESCE(vr.request_display_name, u.full_name) AS full_name, u.username, u.email,
-                   actor.full_name AS created_by_name
-            FROM vacation_requests vr
-            LEFT JOIN users u ON u.id = vr.user_id
-            LEFT JOIN users actor ON actor.id = vr.created_by_user_id
-            WHERE vr.id = ?
-            """,
-            (request_id,),
-            one=True,
+        refreshed = _request_row(request_id)
+        return jsonify(
+            {
+                "request": serialize_request(refreshed),
+                "message": "Vacation scheduled." if resolution["status"] == "scheduled" else resolution["decision_note"],
+            }
         )
-        return jsonify({"request": serialize_request(refreshed)})
 
     @app.post("/api/requests/<int:request_id>/cancel")
     @login_required
@@ -887,6 +1355,8 @@ def register_routes(app):
             abort(404)
         if not can_manage_request(actor, row):
             return jsonify({"error": "You cannot cancel that vacation entry."}), 403
+        if row["status"] == "canceled":
+            return jsonify({"ok": True})
         execute_db(
             """
             UPDATE vacation_requests
@@ -903,7 +1373,128 @@ def register_routes(app):
             request_id,
             changes=[{"field_name": "status", "old_value": row["status"], "new_value": "canceled"}],
         )
-        return jsonify({"ok": True})
+        _promote_waitlisted_requests()
+        return jsonify({"ok": True, "message": "Vacation removed."})
+
+    @app.post("/api/requests/<int:request_id>/remove-day/<day_iso>")
+    @login_required
+    def api_remove_request_day(request_id: int, day_iso: str):
+        actor = current_user()
+        row = query_db("SELECT * FROM vacation_requests WHERE id = ?", (request_id,), one=True)
+        if not row:
+            abort(404)
+        if not can_manage_request(actor, row):
+            return jsonify({"error": "You cannot remove that physician from this day."}), 403
+        if row["status"] != "scheduled":
+            return jsonify({"error": "Only scheduled vacation can be removed from a specific day."}), 400
+        if day_iso < row["start_date"] or day_iso > row["end_date"]:
+            return jsonify({"error": "That day is not inside the selected vacation range."}), 400
+
+        current_day = date.fromisoformat(day_iso)
+        now = iso_now()
+        db = get_db()
+        created_split_request_id = None
+        if row["start_date"] == row["end_date"] == day_iso:
+            db.execute(
+                """
+                UPDATE vacation_requests
+                SET status = 'canceled', decision_note = ?, canceled_at = ?, canceled_by_user_id = ?, updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?
+                """,
+                (f"Removed {day_iso} from the schedule.", now, actor["id"], now, actor["id"], request_id),
+            )
+        elif day_iso == row["start_date"]:
+            db.execute(
+                """
+                UPDATE vacation_requests
+                SET start_date = ?, decision_note = ?, updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?
+                """,
+                ((current_day + timedelta(days=1)).isoformat(), f"Removed {day_iso} from the scheduled range.", now, actor["id"], request_id),
+            )
+        elif day_iso == row["end_date"]:
+            db.execute(
+                """
+                UPDATE vacation_requests
+                SET end_date = ?, decision_note = ?, updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?
+                """,
+                ((current_day - timedelta(days=1)).isoformat(), f"Removed {day_iso} from the scheduled range.", now, actor["id"], request_id),
+            )
+        else:
+            first_end = (current_day - timedelta(days=1)).isoformat()
+            second_start = (current_day + timedelta(days=1)).isoformat()
+            db.execute(
+                """
+                UPDATE vacation_requests
+                SET end_date = ?, decision_note = ?, updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?
+                """,
+                (first_end, f"Removed {day_iso} from the scheduled range.", now, actor["id"], request_id),
+            )
+            created_split_request_id = db.execute(
+                """
+                INSERT INTO vacation_requests
+                (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, source_prompt, source_response,
+                 decision_note, created_at, updated_at, updated_by_user_id)
+                VALUES (?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["user_id"],
+                    row["created_by_user_id"],
+                    row["request_display_name"],
+                    second_start,
+                    row["end_date"],
+                    row["request_note"],
+                    row["source_type"],
+                    row["source_prompt"],
+                    row["source_response"],
+                    f"Split automatically after removing {day_iso}.",
+                    now,
+                    now,
+                    actor["id"],
+                ),
+            ).lastrowid
+        db.commit()
+        record_activity(
+            actor["id"],
+            "vacation-day-removed",
+            f"{actor['full_name']} removed {day_iso} from vacation entry #{request_id}.",
+            "vacation_request",
+            request_id,
+            changes=[{"field_name": "removed_day", "old_value": day_iso, "new_value": None}],
+        )
+        if created_split_request_id:
+            record_activity(
+                actor["id"],
+                "vacation-split-created",
+                f"{actor['full_name']} created split vacation entry #{created_split_request_id} after removing {day_iso}.",
+                "vacation_request",
+                created_split_request_id,
+                changes=[
+                    {"field_name": "start_date", "old_value": None, "new_value": second_start},
+                    {"field_name": "end_date", "old_value": None, "new_value": row["end_date"]},
+                ],
+            )
+        _promote_waitlisted_requests()
+        return jsonify({"ok": True, "message": f"Removed {day_iso} from the vacation schedule."})
+
+    @app.post("/api/requests/unassign-range")
+    @login_required
+    def api_unassign_range():
+        actor = current_user()
+        target_user_id = _parse_int(request.form.get("physician_id"), actor["id"])
+        if not can_manage_physician(actor, target_user_id):
+            return jsonify({"error": "You cannot manage that physician's schedule."}), 403
+
+        start_date = request.form.get("start_date", "").strip()
+        end_date = request.form.get("end_date", "").strip()
+        if not start_date or not end_date:
+            return jsonify({"error": "Start and end dates are required."}), 400
+        if end_date < start_date:
+            return jsonify({"error": "End date must be on or after the start date."}), 400
+        result = _remove_range_from_requests(actor, target_user_id, start_date, end_date)
+        return jsonify({"ok": True, **result})
 
     @app.post("/api/settings")
     @login_required
@@ -911,15 +1502,18 @@ def register_routes(app):
         user = current_user()
         week_start = request.form.get("week_start", "sunday")
         show_week_numbers = 1 if request.form.get("show_week_numbers") == "true" else 0
+        theme_skin = request.form.get("theme_skin", user["theme_skin"] or "slate").strip() or "slate"
         if week_start not in {"sunday", "monday"}:
             return jsonify({"error": "Invalid week start."}), 400
+        if theme_skin not in THEME_CHOICES:
+            return jsonify({"error": "Invalid theme selection."}), 400
         execute_db(
             """
             UPDATE user_settings
-            SET week_start = ?, show_week_numbers = ?
+            SET week_start = ?, show_week_numbers = ?, theme_skin = ?
             WHERE user_id = ?
             """,
-            (week_start, show_week_numbers, user["id"]),
+            (week_start, show_week_numbers, theme_skin, user["id"]),
         )
         record_activity(
             user["id"],
@@ -930,9 +1524,34 @@ def register_routes(app):
             changes=[
                 {"field_name": "week_start", "old_value": user["week_start"], "new_value": week_start},
                 {"field_name": "show_week_numbers", "old_value": user["show_week_numbers"], "new_value": show_week_numbers},
+                {"field_name": "theme_skin", "old_value": user["theme_skin"] or "slate", "new_value": theme_skin},
             ],
         )
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "message": "Settings updated."})
+
+    @app.post("/api/settings/password")
+    @login_required
+    def api_settings_password():
+        user = current_user()
+        current_password = request.form.get("current_password", "")
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        if not verify_password(current_password, user["password_hash"]):
+            return jsonify({"error": "Current password is incorrect."}), 400
+        if len(new_password) < 8:
+            return jsonify({"error": "Use a password with at least 8 characters."}), 400
+        if new_password != confirm_password:
+            return jsonify({"error": "Passwords do not match."}), 400
+        execute_db("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(new_password), user["id"]))
+        record_activity(
+            user["id"],
+            "password-changed",
+            f"{user['full_name']} changed their password.",
+            "user",
+            user["id"],
+            changes=[{"field_name": "password_hash", "old_value": "<redacted>", "new_value": "<updated>"}],
+        )
+        return jsonify({"ok": True, "message": "Password updated."})
 
     @app.get("/api/delegations")
     @login_required
@@ -1002,9 +1621,9 @@ def register_routes(app):
     @app.get("/api/rotation")
     def api_rotation():
         years = _rotation_years()
-        selected_year = _parse_int(request.args.get("year"), years[-1] if years else date.today().year)
+        selected_year = _parse_int(request.args.get("year"), _default_selected_year(years))
         if years and selected_year not in years:
-            selected_year = years[-1]
+            selected_year = _default_selected_year(years)
         actor = current_user()
         user_holidays = []
         if actor and actor["role"] == "physician":
@@ -1075,7 +1694,7 @@ def register_routes(app):
                 f"Offered: {my_assignment['holiday_title']}\n"
                 f"Requested: {their_assignment['holiday_title']}\n"
                 f"Note: {note or 'No note provided.'}\n\n"
-                "Log in to the Vacation Scheduler to accept or reject the trade."
+                "Log in to South Bay ED VL Schedule to accept or reject the trade."
             ),
             purpose="holiday-trade-offer",
             user_id=offered_to_user_id,
@@ -1098,19 +1717,19 @@ def register_routes(app):
     def api_respond_trade(trade_id: int):
         actor = current_user()
         action = request.form.get("action", "").strip().lower()
-        if action not in {"accept", "reject"}:
+        if action not in {"accept", "reject", "cancel"}:
             return jsonify({"error": "Invalid trade response."}), 400
         trade = query_db("SELECT * FROM holiday_trade_offers WHERE id = ?", (trade_id,), one=True)
         if not trade:
             abort(404)
-        if actor["role"] != "admin" and trade["offered_to_user_id"] != actor["id"]:
-            return jsonify({"error": "Only the invited physician can respond to this trade."}), 403
         if trade["status"] != "pending":
             return jsonify({"error": "That trade is no longer pending."}), 400
 
         db = get_db()
         now = iso_now()
         if action == "accept":
+            if actor["role"] != "admin" and trade["offered_to_user_id"] != actor["id"]:
+                return jsonify({"error": "Only the invited physician can respond to this trade."}), 403
             offered_assignment = db.execute(
                 """
                 SELECT * FROM holiday_rotation_assignments
@@ -1152,7 +1771,9 @@ def register_routes(app):
                 trade_id,
                 changes=[{"field_name": "status", "old_value": "pending", "new_value": "accepted"}],
             )
-        else:
+        elif action == "reject":
+            if actor["role"] != "admin" and trade["offered_to_user_id"] != actor["id"]:
+                return jsonify({"error": "Only the invited physician can respond to this trade."}), 403
             db.execute(
                 """
                 UPDATE holiday_trade_offers
@@ -1170,7 +1791,54 @@ def register_routes(app):
                 trade_id,
                 changes=[{"field_name": "status", "old_value": "pending", "new_value": "rejected"}],
             )
+        else:
+            if actor["role"] != "admin" and trade["offered_by_user_id"] != actor["id"]:
+                return jsonify({"error": "Only the physician who sent the offer can cancel it."}), 403
+            db.execute(
+                """
+                UPDATE holiday_trade_offers
+                SET status = 'canceled', responded_at = ?, responded_by_user_id = ?
+                WHERE id = ?
+                """,
+                (now, actor["id"], trade_id),
+            )
+            db.commit()
+            record_activity(
+                actor["id"],
+                "trade-canceled",
+                f"{actor['full_name']} canceled holiday trade #{trade_id}.",
+                "holiday_trade",
+                trade_id,
+                changes=[{"field_name": "status", "old_value": "pending", "new_value": "canceled"}],
+            )
         return jsonify({"trades": _trades_for_actor(actor)})
+
+    @app.post("/api/admin/trades/cancel-pending")
+    @admin_required
+    def api_admin_cancel_pending_trades():
+        admin_user = current_user()
+        pending_trades = query_db("SELECT id FROM holiday_trade_offers WHERE status = 'pending' ORDER BY id ASC")
+        if not pending_trades:
+            return jsonify({"ok": True, "canceledCount": 0})
+        now = iso_now()
+        execute_db(
+            """
+            UPDATE holiday_trade_offers
+            SET status = 'canceled', responded_at = ?, responded_by_user_id = ?
+            WHERE status = 'pending'
+            """,
+            (now, admin_user["id"]),
+        )
+        for trade in pending_trades:
+            record_activity(
+                admin_user["id"],
+                "trade-canceled",
+                f"{admin_user['full_name']} canceled holiday trade #{trade['id']} from the admin console.",
+                "holiday_trade",
+                trade["id"],
+                changes=[{"field_name": "status", "old_value": "pending", "new_value": "canceled"}],
+            )
+        return jsonify({"ok": True, "canceledCount": len(pending_trades)})
 
     @app.get("/api/admin/users")
     @admin_required
@@ -1194,10 +1862,26 @@ def register_routes(app):
         username = request.form.get("username", "").strip()
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "").strip()
+        confirm_password = request.form.get("confirm_password", "").strip()
         role = request.form.get("role", "physician").strip()
-        annual_day_limit = _parse_int(request.form.get("annual_day_limit"), 0)
-        if not all([full_name, username, email, password]) or role not in {"physician", "admin"}:
-            return jsonify({"error": "Full name, username, email, password, and role are required."}), 400
+        provisioning_mode = request.form.get("provisioning_mode", "reset_link").strip() or "reset_link"
+        if not all([full_name, username, email]) or role not in {"physician", "admin"}:
+            return jsonify({"error": "Full name, username, email, and role are required."}), 400
+        if provisioning_mode not in {"reset_link", "manual_password", "random_password"}:
+            return jsonify({"error": "Choose how the new user should set their password."}), 400
+
+        if provisioning_mode == "manual_password":
+            if not password:
+                return jsonify({"error": "Enter a password or choose a different setup option."}), 400
+            if len(password) < 8:
+                return jsonify({"error": "Use a password with at least 8 characters."}), 400
+            if password != confirm_password:
+                return jsonify({"error": "Passwords do not match."}), 400
+            issued_password = password
+        elif provisioning_mode == "random_password":
+            issued_password = _generate_temporary_password()
+        else:
+            issued_password = _generate_temporary_password(18)
 
         db = get_db()
         try:
@@ -1206,10 +1890,10 @@ def register_routes(app):
                 INSERT INTO users (username, full_name, email, password_hash, role, annual_day_limit)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (username, full_name, email, hash_password(password), role, max(0, annual_day_limit or 0)),
+                (username, full_name, email, hash_password(issued_password), role, 0),
             ).lastrowid
             db.execute(
-                "INSERT INTO user_settings (user_id, week_start, show_week_numbers) VALUES (?, 'sunday', 0)",
+                "INSERT INTO user_settings (user_id, week_start, show_week_numbers, theme_skin) VALUES (?, 'sunday', 0, 'slate')",
                 (user_id,),
             )
             db.commit()
@@ -1217,19 +1901,36 @@ def register_routes(app):
             db.rollback()
             return jsonify({"error": f"Unable to create user: {exc}"}), 400
 
-        send_email(
-            to_email=email,
-            subject="Your Vacation Scheduler account",
-            body=(
-                f"Hello {full_name},\n\n"
-                "A Vacation Scheduler account has been created for you.\n"
-                f"Username: {username}\n"
-                f"Temporary password: {password}\n"
-                "Please log in and change it using the password reset flow if needed."
-            ),
-            purpose="new-user",
-            user_id=user_id,
-        )
+        if provisioning_mode == "reset_link":
+            token, _ = _issue_password_reset_token(user_id, lifetime_hours=72)
+            reset_link = url_for("reset_password", token=token, _external=True)
+            send_email(
+                to_email=email,
+                subject="Set up your South Bay ED VL Schedule password",
+                body=(
+                    f"Hello {full_name},\n\n"
+                    "A South Bay ED VL Schedule account has been created for you.\n"
+                    f"Username: {username}\n"
+                    f"Use this link to choose your password: {reset_link}\n\n"
+                    "This setup link expires automatically. If it expires, use the Forgot Password page to request a new one."
+                ),
+                purpose="new-user-reset-link",
+                user_id=user_id,
+            )
+        else:
+            send_email(
+                to_email=email,
+                subject="Your South Bay ED VL Schedule account",
+                body=(
+                    f"Hello {full_name},\n\n"
+                    "A South Bay ED VL Schedule account has been created for you.\n"
+                    f"Username: {username}\n"
+                    f"Temporary password: {issued_password}\n"
+                    "Please log in and change it using the password reset flow if needed."
+                ),
+                purpose="new-user-password",
+                user_id=user_id,
+            )
         record_activity(
             admin_user["id"],
             "user-created",
@@ -1240,10 +1941,15 @@ def register_routes(app):
                 {"field_name": "username", "old_value": None, "new_value": username},
                 {"field_name": "email", "old_value": None, "new_value": email},
                 {"field_name": "role", "old_value": None, "new_value": role},
-                {"field_name": "annual_day_limit", "old_value": None, "new_value": annual_day_limit or 0},
+                {"field_name": "provisioning_mode", "old_value": None, "new_value": provisioning_mode},
             ],
         )
-        return jsonify({"ok": True})
+        message = (
+            f"Created {full_name} and emailed a password setup link."
+            if provisioning_mode == "reset_link"
+            else f"Created {full_name} and emailed a temporary password."
+        )
+        return jsonify({"ok": True, "message": message})
 
     @app.post("/api/admin/users/<int:user_id>")
     @admin_required
@@ -1257,9 +1963,11 @@ def register_routes(app):
         email = request.form.get("email", "").strip()
         role = request.form.get("role", "").strip()
         password = request.form.get("password", "").strip()
-        annual_day_limit = _parse_int(request.form.get("annual_day_limit"), 0)
+        confirm_password = request.form.get("confirm_password", "").strip()
         if not all([full_name, username, email]) or role not in {"physician", "admin"}:
             return jsonify({"error": "Full name, username, email, and role are required."}), 400
+        if password and password != confirm_password:
+            return jsonify({"error": "Passwords do not match."}), 400
 
         db = get_db()
         try:
@@ -1267,19 +1975,19 @@ def register_routes(app):
                 db.execute(
                     """
                     UPDATE users
-                    SET full_name = ?, username = ?, email = ?, role = ?, annual_day_limit = ?, password_hash = ?
+                    SET full_name = ?, username = ?, email = ?, role = ?, annual_day_limit = 0, password_hash = ?
                     WHERE id = ?
                     """,
-                    (full_name, username, email, role, max(0, annual_day_limit or 0), hash_password(password), user_id),
+                    (full_name, username, email, role, hash_password(password), user_id),
                 )
             else:
                 db.execute(
                     """
                     UPDATE users
-                    SET full_name = ?, username = ?, email = ?, role = ?, annual_day_limit = ?
+                    SET full_name = ?, username = ?, email = ?, role = ?, annual_day_limit = 0
                     WHERE id = ?
                     """,
-                    (full_name, username, email, role, max(0, annual_day_limit or 0), user_id),
+                    (full_name, username, email, role, user_id),
                 )
             db.execute("UPDATE vacation_requests SET request_display_name = ? WHERE user_id = ?", (full_name, user_id))
             db.commit()
@@ -1293,10 +2001,11 @@ def register_routes(app):
             ("username", user["username"], username),
             ("email", user["email"], email),
             ("role", user["role"], role),
-            ("annual_day_limit", user["annual_day_limit"], annual_day_limit or 0),
         ]:
             if old_value != new_value:
                 changes.append({"field_name": field_name, "old_value": old_value, "new_value": new_value})
+        if user["annual_day_limit"] != 0:
+            changes.append({"field_name": "annual_day_limit", "old_value": user["annual_day_limit"], "new_value": 0})
         if password:
             changes.append({"field_name": "password_hash", "old_value": "<redacted>", "new_value": "<updated>"})
         record_activity(
@@ -1307,7 +2016,7 @@ def register_routes(app):
             user_id,
             changes=changes,
         )
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "message": f"Updated {full_name}."})
 
     @app.post("/api/admin/users/<int:user_id>/toggle")
     @admin_required
@@ -1465,53 +2174,69 @@ def register_routes(app):
     @app.get("/api/admin/logs")
     @admin_required
     def api_admin_logs():
-        activity_rows = query_db(
-            """
-            SELECT al.*, u.full_name AS actor_name
-            FROM activity_log al
-            LEFT JOIN users u ON u.id = al.actor_user_id
-            ORDER BY al.created_at DESC, al.id DESC
-            LIMIT 150
-            """
-        )
-        change_rows = query_db(
-            """
-            SELECT cl.*, u.full_name AS actor_name
-            FROM change_log cl
-            LEFT JOIN users u ON u.id = cl.actor_user_id
-            ORDER BY cl.created_at DESC, cl.id DESC
-            LIMIT 250
-            """
-        )
-        return jsonify(
-            {
-                "activity": [
-                    {
-                        "id": row["id"],
-                        "actor": row["actor_name"] or "System",
-                        "eventType": row["event_type"],
-                        "message": row["message"],
-                        "entityType": row["entity_type"],
-                        "entityId": row["entity_id"],
-                        "createdAt": row["created_at"],
-                    }
-                    for row in activity_rows
-                ],
-                "changes": [
-                    {
-                        "id": row["id"],
-                        "actor": row["actor_name"] or "System",
-                        "entityType": row["entity_type"],
-                        "entityId": row["entity_id"],
-                        "fieldName": row["field_name"],
-                        "oldValue": row["old_value"],
-                        "newValue": row["new_value"],
-                        "createdAt": row["created_at"],
-                    }
-                    for row in change_rows
-                ],
-            }
-        )
+        kind = request.args.get("kind", "activity").strip().lower()
+        page_size = min(max(_parse_int(request.args.get("page_size"), 100) or 100, 1), 100)
+        page = max(_parse_int(request.args.get("page"), 1) or 1, 1)
+
+        if kind == "changes":
+            total_row = query_db("SELECT COUNT(*) AS count FROM change_log", one=True)
+            total = int(total_row["count"] if total_row else 0)
+            page_count = max(1, (total + page_size - 1) // page_size)
+            page = min(page, page_count)
+            offset = (page - 1) * page_size
+            rows = query_db(
+                """
+                SELECT cl.*, u.full_name AS actor_name
+                FROM change_log cl
+                LEFT JOIN users u ON u.id = cl.actor_user_id
+                ORDER BY cl.created_at DESC, cl.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (page_size, offset),
+            )
+            items = [
+                {
+                    "id": row["id"],
+                    "actor": row["actor_name"] or "System",
+                    "entityType": row["entity_type"],
+                    "entityId": row["entity_id"],
+                    "fieldName": row["field_name"],
+                    "oldValue": row["old_value"],
+                    "newValue": row["new_value"],
+                    "createdAt": row["created_at"],
+                }
+                for row in rows
+            ]
+        else:
+            kind = "activity"
+            total_row = query_db("SELECT COUNT(*) AS count FROM activity_log", one=True)
+            total = int(total_row["count"] if total_row else 0)
+            page_count = max(1, (total + page_size - 1) // page_size)
+            page = min(page, page_count)
+            offset = (page - 1) * page_size
+            rows = query_db(
+                """
+                SELECT al.*, u.full_name AS actor_name
+                FROM activity_log al
+                LEFT JOIN users u ON u.id = al.actor_user_id
+                ORDER BY al.created_at DESC, al.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (page_size, offset),
+            )
+            items = [
+                {
+                    "id": row["id"],
+                    "actor": row["actor_name"] or "System",
+                    "eventType": row["event_type"],
+                    "message": row["message"],
+                    "entityType": row["entity_type"],
+                    "entityId": row["entity_id"],
+                    "createdAt": row["created_at"],
+                }
+                for row in rows
+            ]
+        return jsonify({"kind": kind, "page": page, "pageSize": page_size, "pageCount": page_count, "total": total, "items": items})
 
     @app.get("/api/admin/export")
     @admin_required

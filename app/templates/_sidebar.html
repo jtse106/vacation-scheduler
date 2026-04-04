@@ -1,18 +1,20 @@
 <aside class="sidebar">
+  {% if request.endpoint != 'index' %}
   <button id="openRequestModal" class="primary-button large-button request-button" type="button">
     <span>Schedule Vacation</span>
   </button>
+  {% endif %}
 
   <div class="mini-calendar card">
     <div class="mini-calendar-header">
-      <div class="mini-calendar-nav-group">
+      <div class="mini-calendar-nav-stack">
         <button id="miniPrevYear" class="icon-button mini-nav-button" type="button"><<</button>
         <button id="miniPrev" class="icon-button mini-nav-button" type="button"><</button>
       </div>
       <div id="miniCalendarLabel"></div>
-      <div class="mini-calendar-nav-group">
-        <button id="miniNext" class="icon-button mini-nav-button" type="button">></button>
+      <div class="mini-calendar-nav-stack">
         <button id="miniNextYear" class="icon-button mini-nav-button" type="button">>></button>
+        <button id="miniNext" class="icon-button mini-nav-button" type="button">></button>
       </div>
     </div>
     <div id="miniCalendarGrid"></div>

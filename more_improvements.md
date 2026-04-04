@@ -1,0 +1,12 @@
+View this as a checklist, also view the improvements like a checklist. Don't finish until you have completed every item.
+
+The user needs change password area. This in the user specific settings area.
+The admin should be able to change each user's password as well
+There should be a way for users to cancel their pending trade offers.
+There should be a way for the admin to cancel everyone's pending trade offer.
+The administrator dashboard should have an area where you can add doctors . It should show every doctor in the system. There should be ability to add and remove doctors. There should be ability to reset doctor's passwords from the administrative console
+The easter egg only has one block. Also the paddle tends to move when it's idling. It shouldn't be moving and following the ball. It should just be still. The easter egg should have lots of blocks and perhaps they should be oriented randomly to make it different and more fun. They should be different colors too.
+Keep the wait list functionality for this. There should be a in order wait list for people who make requests for certain dates and they should be filled in if people are taken off of the vacation calendar.
+There should be An option and functionality for administrators to remove people off of vacation dates. The individual user should also be able to remove themselves off of specific dates, or if they are delegated to remove a different physician, then they should be able to remove that physician as well.
+The top where it says guaranteed vacation schedule is in blue but it's kind of hard to read because there's a stripe and then it's Gray on the right side and the text appears white on Gray which is really hard to read. It's probably better if the whole thing is blue. Or make the background darker, it has to be changed somehow 'cause it looks bad. You can check it on play right if you don't know what I'm talking about. I'm talking about the banner at the top of the calendar initial view.
+On the calendar, you need to display which dates are holidays. You've done it on a few of them where it was already noted on the legacy VL calendar, but remember the rules that are improvements MD, it explains which dates are supposed to be blocked off as holidays then you need to write which holiday it is on those dates, block them off, don't put any slots on those dates. It should just say the name of the holiday To avoid any confusion. If there is slots on there people think that they can sign up for them.

@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     user_id INTEGER PRIMARY KEY,
     week_start TEXT NOT NULL DEFAULT 'sunday',
     show_week_numbers INTEGER NOT NULL DEFAULT 0,
+    theme_skin TEXT NOT NULL DEFAULT 'slate',
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -211,6 +212,9 @@ def _ensure_columns(db: sqlite3.Connection):
         db.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")
     if "annual_day_limit" not in user_columns:
         db.execute("ALTER TABLE users ADD COLUMN annual_day_limit INTEGER NOT NULL DEFAULT 0")
+    settings_columns = {row["name"] for row in db.execute("PRAGMA table_info(user_settings)").fetchall()}
+    if "theme_skin" not in settings_columns:
+        db.execute("ALTER TABLE user_settings ADD COLUMN theme_skin TEXT NOT NULL DEFAULT 'slate'")
 
     additions = {
         "request_display_name": "TEXT",
@@ -315,6 +319,10 @@ def active_request_statuses():
 
 def overlapping_requests(day_iso: str, *, include_canceled: bool = False):
     statuses = active_request_statuses() if not include_canceled else ("scheduled", "canceled")
+    return requests_for_day(day_iso, statuses=statuses)
+
+
+def requests_for_day(day_iso: str, *, statuses: tuple[str, ...] = ("scheduled",)):
     placeholders = ",".join("?" for _ in statuses)
     return query_db(
         f"""
@@ -326,10 +334,56 @@ def overlapping_requests(day_iso: str, *, include_canceled: bool = False):
         WHERE vr.start_date <= ?
           AND vr.end_date >= ?
           AND vr.status IN ({placeholders})
-        ORDER BY u.full_name COLLATE NOCASE ASC, vr.start_date ASC, vr.id ASC
+        ORDER BY vr.status DESC, u.full_name COLLATE NOCASE ASC, vr.start_date ASC, vr.id ASC
         """,
         (day_iso, day_iso, *statuses),
     )
+
+
+def requests_overlapping_range(
+    user_id: int,
+    start_date: str,
+    end_date: str,
+    *,
+    statuses: tuple[str, ...] = ("scheduled", "waitlisted"),
+):
+    placeholders = ",".join("?" for _ in statuses)
+    return query_db(
+        f"""
+        SELECT *
+        FROM vacation_requests
+        WHERE user_id = ?
+          AND status IN ({placeholders})
+          AND start_date <= ?
+          AND end_date >= ?
+        ORDER BY start_date ASC, id ASC
+        """,
+        (user_id, *statuses, end_date, start_date),
+    )
+
+
+def waitlist_counts_for_month(year: int, month: int):
+    first_day = date(year, month, 1)
+    next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+    start_iso = first_day.isoformat()
+    end_iso = (next_month - timedelta(days=1)).isoformat()
+    mapping = defaultdict(int)
+    rows = query_db(
+        """
+        SELECT start_date, end_date
+        FROM vacation_requests
+        WHERE status = 'waitlisted'
+          AND start_date <= ?
+          AND end_date >= ?
+        """,
+        (end_iso, start_iso),
+    )
+    for row in rows:
+        start = max(start_iso, row["start_date"])
+        end = min(end_iso, row["end_date"])
+        for day_iso in daterange(start, end):
+            mapping[day_iso] += 1
+    return mapping
 
 
 def default_email_for_username(username: str) -> str:
@@ -440,18 +494,26 @@ def holiday_map_for_month(year: int, month: int):
     return mapping
 
 
-def scheduled_conflict_for_physician(user_id: int, start_date: str, end_date: str, *, exclude_request_id: int | None = None):
-    params = [user_id, end_date, start_date]
+def request_conflict_for_physician(
+    user_id: int,
+    start_date: str,
+    end_date: str,
+    *,
+    statuses: tuple[str, ...] = ("scheduled", "waitlisted"),
+    exclude_request_id: int | None = None,
+):
+    params = [user_id, *statuses, end_date, start_date]
     exclude_clause = ""
     if exclude_request_id is not None:
         exclude_clause = "AND id != ?"
         params.append(exclude_request_id)
+    placeholders = ",".join("?" for _ in statuses)
     return query_db(
         f"""
         SELECT *
         FROM vacation_requests
         WHERE user_id = ?
-          AND status = 'scheduled'
+          AND status IN ({placeholders})
           AND start_date <= ?
           AND end_date >= ?
           {exclude_clause}
@@ -506,7 +568,14 @@ def scheduled_day_usage_by_year(user_id: int, *, exclude_request_id: int | None 
     return counts
 
 
-def validate_request_window(user_id: int, start_date: str, end_date: str, *, exclude_request_id: int | None = None):
+def validate_request_window(
+    user_id: int,
+    start_date: str,
+    end_date: str,
+    *,
+    exclude_request_id: int | None = None,
+    allow_full_days: bool = False,
+):
     if not start_date or not end_date:
         raise ValueError("Start and end dates are required.")
     if end_date < start_date:
@@ -517,8 +586,10 @@ def validate_request_window(user_id: int, start_date: str, end_date: str, *, exc
         titles = ", ".join(row["title"] for row in holiday_rows)
         raise ValueError(f"{titles} are protected holiday dates and cannot be requested.")
 
-    existing = scheduled_conflict_for_physician(user_id, start_date, end_date, exclude_request_id=exclude_request_id)
+    existing = request_conflict_for_physician(user_id, start_date, end_date, exclude_request_id=exclude_request_id)
     if existing:
+        if existing["status"] == "waitlisted":
+            raise ValueError("This physician already has a waitlisted vacation request overlapping those dates.")
         raise ValueError("This physician already has scheduled vacation overlapping those dates.")
 
     full_days = []
@@ -526,28 +597,12 @@ def validate_request_window(user_id: int, start_date: str, end_date: str, *, exc
     for day_iso in daterange(start_date, end_date):
         if scheduled_count_for_day(day_iso, exclude_request_id=exclude_request_id) >= max_slots:
             full_days.append(day_iso)
-    if full_days:
+    if full_days and not allow_full_days:
         preview = ", ".join(full_days[:5])
         suffix = "..." if len(full_days) > 5 else ""
         raise ValueError(f"All vacation slots are already filled for: {preview}{suffix}")
 
-    user = query_db(
-        "SELECT full_name, annual_day_limit FROM users WHERE id = ? AND deleted_at IS NULL",
-        (user_id,),
-        one=True,
-    )
-    if user and user["annual_day_limit"]:
-        current_usage = scheduled_day_usage_by_year(user_id, exclude_request_id=exclude_request_id)
-        pending_usage = defaultdict(int)
-        for day_iso in daterange(start_date, end_date):
-            pending_usage[int(day_iso[:4])] += 1
-        violations = []
-        for year_value, pending_days in pending_usage.items():
-            used_days = current_usage[year_value]
-            if used_days + pending_days > user["annual_day_limit"]:
-                violations.append(f"{year_value} ({used_days + pending_days}/{user['annual_day_limit']} days)")
-        if violations:
-            raise ValueError(f"{user['full_name']} would exceed the annual VL day limit for {', '.join(violations)}.")
+    return {"full_days": full_days}
 
 
 def record_activity(actor_user_id, event_type: str, message: str, entity_type: str | None = None, entity_id: int | None = None, changes=None):

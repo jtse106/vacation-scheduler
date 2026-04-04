@@ -9,10 +9,17 @@
           <div>
             <span class="page-kicker">Schedule</span>
             <h1>Vacation history</h1>
-            <p class="subtle">Edit or cancel any vacation entry you are allowed to manage.</p>
+            <p class="subtle">Edit or cancel any vacation entry you are allowed to manage. Requests for full dates stay on the waitlist until space opens.</p>
           </div>
         </div>
         <div id="historyList" class="history-list"></div>
+        <div class="page-header top-gap">
+          <div>
+            <h2>Waitlist</h2>
+            <p class="subtle">These requests are queued in order and are promoted automatically when space opens.</p>
+          </div>
+        </div>
+        <div id="waitlistList" class="history-list"></div>
       </section>
 
       <div class="two-column-grid">
@@ -24,7 +31,7 @@
               <p class="subtle">Grant another physician permission to update your schedule.</p>
             </div>
           </div>
-          <form id="delegationForm" class="stack compact-form">
+          <form id="delegationForm" class="stack compact-form form-grid">
             <label>
               <span>Delegate physician</span>
               <select name="delegate_user_id" id="delegationSelect">
@@ -50,10 +57,10 @@
             <div>
               <span class="page-kicker">Holiday Trades</span>
               <h2>Offer or respond to trades</h2>
-              <p class="subtle">Major holidays trade with major holidays. Minor holidays trade with minor holidays.</p>
+              <p class="subtle">Major holidays trade with major holidays. Minor holidays trade with minor holidays. Pending offers can be canceled by the sending physician.</p>
             </div>
           </div>
-          <form id="tradeForm" class="stack compact-form">
+          <form id="tradeForm" class="stack compact-form form-grid">
             <label>
               <span>Year</span>
               <select name="year" id="tradeYearSelect">
