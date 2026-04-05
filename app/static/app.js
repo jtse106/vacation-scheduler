@@ -43,6 +43,7 @@ const state = {
 
 const KONAMI = ["ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown", "ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowRight", "b", "a", "Enter"];
 const THEME_OPTIONS = window.APP_CONFIG.themeOptions || [];
+const ROOT_PATH = (window.APP_CONFIG.rootPath || "").replace(/\/$/, "");
 let konamiIndex = 0;
 window.__VACATION_SCHEDULER_STATE__ = state;
 
@@ -63,8 +64,16 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function appUrl(path) {
+  if (!path) return ROOT_PATH || "/";
+  if (/^https?:\/\//i.test(path)) return path;
+  if (path.startsWith("#")) return `${ROOT_PATH || ""}${path}`;
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  return `${ROOT_PATH}${normalized}` || normalized;
+}
+
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(appUrl(url), options);
   const text = await response.text();
   let data = {};
   try {
@@ -148,7 +157,7 @@ function renderPendingTradeNotice() {
   }
   mount.classList.remove("hidden");
   mount.dataset.tradeCount = String(notice.count);
-  mount.innerHTML = `<a href="${escapeHtml(notice.href || "/history#tradeSection")}">${escapeHtml(notice.message)}</a>`;
+  mount.innerHTML = `<a href="${escapeHtml(appUrl(notice.href || "/history#tradeSection"))}">${escapeHtml(notice.message)}</a>`;
 }
 
 function showToast(message, type = "info") {
@@ -901,7 +910,7 @@ async function loadTrades() {
   state.session.pendingTradeNotice = pendingIncoming.length
     ? {
         count: pendingIncoming.length,
-        href: "/history#tradeSection",
+        href: appUrl("/history#tradeSection"),
         message: pendingIncoming.length === 1
           ? "1 holiday trade request needs your response."
           : `${pendingIncoming.length} holiday trade requests need your response.`,
@@ -927,7 +936,7 @@ async function updateRotationAssignment(assignmentId, userId) {
 
 function openRequestModalForCreate() {
   if (!state.session.currentUser) {
-    window.location.href = "/login";
+    window.location.href = appUrl("/login");
     return;
   }
   const actor = state.session.currentUser;
@@ -1164,7 +1173,7 @@ async function loadAdminExport(year = Number(qs("#exportYearInput")?.value || ne
   }).join("");
   wrap.innerHTML = `<table class="export-table"><thead><tr><th>Physician</th>${header}</tr></thead><tbody>${rows}</tbody></table>`;
   const download = qs("#downloadExportButton");
-  if (download) download.href = `/api/admin/export.csv?year=${year}`;
+  if (download) download.href = appUrl(`/api/admin/export.csv?year=${year}`);
 }
 
 function startDictation() {

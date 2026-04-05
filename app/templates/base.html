@@ -279,6 +279,7 @@
         gameHighScore: {{ nav_breakout_scores.highScore | tojson }},
         gamePersonalBest: {{ nav_breakout_scores.personalBest | tojson }},
         pendingTradeNotice: {{ nav_pending_trade_notice | tojson }},
+        rootPath: {{ request.script_root | tojson }},
       };
     </script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>

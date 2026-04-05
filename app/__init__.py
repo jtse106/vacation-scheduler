@@ -2,6 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .db import ensure_seed_data, init_db
 from .routes import register_routes
@@ -33,6 +34,7 @@ def create_app() -> Flask:
             os.environ.get("MODEL_ID", os.environ.get("model_ID", "gpt-5.4-nano")),
         ),
     )
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
     init_db(app)
     ensure_seed_data(app)

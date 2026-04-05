@@ -1,0 +1,7 @@
+handle_path /vlcalendar* {
+  reverse_proxy vlcalendar-app:5000 {
+    header_up X-Forwarded-Prefix /vlcalendar
+    header_up X-Forwarded-Proto {scheme}
+    header_up X-Forwarded-Host {host}
+  }
+}

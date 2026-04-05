@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    container_name: vlcalendar-app
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    ports:
+      - "127.0.0.1:5001:5000"
+    volumes:
+      - vlcalendar_data:/data
+    networks:
+      - default
+      - assignsheet_proxy
+
+volumes:
+  vlcalendar_data:
+
+networks:
+  assignsheet_proxy:
+    external: true
+    name: assignmentsheet30_default

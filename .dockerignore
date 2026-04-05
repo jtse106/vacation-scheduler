@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.playwright/
+app/data/*.db
+app/data/*.sqlite
+app/data/*.sqlite3
+app/data/*.log
+node_modules/
+.env
+ssh-key-2026-03-28.key
+Screenshot *.png
