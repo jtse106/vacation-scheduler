@@ -31,3 +31,5 @@ X add a South Bay ED VL Schedule link to the Left lower pane that returns back t
 X Don't allow additions to the schedule more than 1 year in advance. this applies to the AI assistant as well. make the bottor right error message say this if needed.
 
 X add detailed logs stating all the messages and details for all the AI assisted scheduling and emailing including all the details, everything, don't spare any detail.
+
+if someone has a holiday request trade request from another doctor to them, fa
