@@ -360,21 +360,37 @@ img { max-width: 100%; display: block; }
 }
 
 .sidebar-links {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 
-.sidebar-links a {
-  padding: 9px 10px;
+.sidebar-links a,
+.sidebar-link-button {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
   border-radius: 10px;
   font-weight: 600;
+  text-align: left;
 }
 
-.sidebar-links a:hover {
+.sidebar-link-button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sidebar-links a:hover,
+.sidebar-link-button:hover {
   background: #f6f8fc;
 }
 
-.sidebar-links a.active {
+.sidebar-links a.active,
+.sidebar-link-button.active {
   background: linear-gradient(180deg, #eef4fd 0%, #e4ecfb 100%);
   color: var(--blue-deep);
 }
@@ -580,6 +596,23 @@ img { max-width: 100%; display: block; }
   color: inherit;
 }
 
+.icon-label-button {
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  justify-content: center;
+}
+
+.icon-label-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .calendar-header {
   padding: 6px 10px;
   min-height: 48px;
@@ -752,6 +785,14 @@ img { max-width: 100%; display: block; }
   font-size: 0.72rem;
   font-weight: 700;
   box-shadow: inset 0 0 0 1px rgba(154, 103, 0, 0.14);
+  cursor: pointer;
+  transition: transform 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.waitlist-badge:hover {
+  background: #ffedc2;
+  box-shadow: inset 0 0 0 1px rgba(154, 103, 0, 0.22);
+  transform: translateY(-1px);
 }
 
 .page-kicker,
@@ -852,6 +893,13 @@ img { max-width: 100%; display: block; }
 .waitlist-card {
   border-color: #f2d7a2;
   background: linear-gradient(180deg, #fffaf1 0%, #fff6e8 100%);
+}
+
+.waitlist-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .request-button {
@@ -1338,6 +1386,33 @@ textarea { resize: vertical; }
 .toast-warning {
   border-color: rgba(154, 103, 0, 0.22);
   background: #fff8eb;
+}
+
+.trade-notice {
+  position: sticky;
+  top: 8px;
+  z-index: 25;
+  width: min(1480px, calc(100% - 20px));
+  margin: 8px auto 0;
+}
+
+.trade-notice.hidden {
+  display: none;
+}
+
+.trade-notice a {
+  display: block;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(154, 103, 0, 0.24);
+  background: linear-gradient(180deg, #fff8e8 0%, #fff4da 100%);
+  color: #6d4a00;
+  font-weight: 700;
+  box-shadow: 0 10px 20px rgba(154, 103, 0, 0.08);
+}
+
+.trade-notice a:hover {
+  background: linear-gradient(180deg, #fff4d8 0%, #ffefca 100%);
 }
 
 .form-feedback {

@@ -18,6 +18,14 @@
     {% endwith %}
 
     <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+    <div
+      id="tradeNoticeMount"
+      class="trade-notice{% if not nav_pending_trade_notice %} hidden{% endif %}"
+      {% if nav_pending_trade_notice %}data-trade-count="{{ nav_pending_trade_notice.count }}"{% endif %}>
+      {% if nav_pending_trade_notice %}
+        <a href="{{ nav_pending_trade_notice.href }}">{{ nav_pending_trade_notice.message }}</a>
+      {% endif %}
+    </div>
 
     {% block body %}{% endblock %}
 
@@ -269,6 +277,7 @@
         rotationYears: [],
         gameHighScore: {{ nav_breakout_scores.highScore | tojson }},
         gamePersonalBest: {{ nav_breakout_scores.personalBest | tojson }},
+        pendingTradeNotice: {{ nav_pending_trade_notice | tojson }},
       };
     </script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>

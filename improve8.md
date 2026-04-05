@@ -32,4 +32,27 @@ X Don't allow additions to the schedule more than 1 year in advance. this applie
 
 X add detailed logs stating all the messages and details for all the AI assisted scheduling and emailing including all the details, everything, don't spare any detail.
 
-if someone has a holiday request trade request from another doctor to them, fa
+X if someone has a holiday request trade request from another doctor to them, put a message at the top of the screen (unobtrusively) when they login, that should catche their attention to let them know. then they click it and it takes them to the Holiday trades area where they can accept or reject it.
+
+X put a authorized delegates link into the L lower card as its own separate setting.
+X put a holiday trades link into the L lower card to make it its own separate setting.
+X make a gear icon for the settings button top upper right.
+X also put a settings link in the left lower card
+
+X delete all the current VL calendar vacation requests. then sync the current calendar to the legacy calendars.
+
+X make the waitlist visible (with order and timestamps -- unobtrusive timestamps) if you click the waitlist badge on any given date. this should be available for all users. and it should be editable for the admin. 
+
+X make the gold bar in the easter egg breakout game more randomly placed, and make it truly gold colored instead of just yellow. make it look like a gold bar.
+
+when you lose in the breakout game, it should flash game over across the screen
+
+also, reset the high score to zero. and make the score countdown count down from 10000. and make your score go higher the longer you keep all 3 balls alive.
+
+the gear looks wierd in the settings in upper right button. use playwright to look at it and fix it with a better gear icon.
+
+there's a problem with the waitlist, if a User selects multiple dates and some of the dates Have all of their slots full But some of the selected dates are not completely filled, when you Click to assign yourself to these shifts. The dates that are completely filled should be put on the wait list but the dates that have openings that doctor should be assigned to those open slots. As it stands currently the Doctor is just assigned to the wait list across the entire selection even if a portion of the selection has open slots.
+
+But there should be a way for the administrator to manually edit the holiday rotation schedule.
+
+The legacy VL calendars are considered a truth as of April 4th 2026. There should be a button on the legacy VL calendar section to synchronize the current schedule to the legacy VL calendars. A copy of the current actual schedule should be saved into the database in case it needs to be restored at a later point. everything should be logged appropriately.

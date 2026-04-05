@@ -13,7 +13,12 @@
           <button id="openRequestModalInline" class="primary-button" type="button">Schedule</button>
           <button id="todayButton" class="secondary-button" type="button">Today</button>
           {% if nav_user %}
-            <button id="settingsButton" class="secondary-button" type="button">Settings</button>
+            <button id="settingsButton" class="secondary-button icon-label-button" type="button" data-open-settings="appearance" aria-label="Settings">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3.2l1.2 2.2 2.5.4.7 2.4 2.1 1.4-.7 2.4.7 2.4-2.1 1.4-.7 2.4-2.5.4-1.2 2.2-2.4-.8-2.4.8-1.2-2.2-2.5-.4-.7-2.4-2.1-1.4.7-2.4-.7-2.4 2.1-1.4.7-2.4 2.5-.4L12 3.2zm0 5a3.8 3.8 0 100 7.6 3.8 3.8 0 000-7.6z"></path>
+              </svg>
+              <span class="sr-only">Settings</span>
+            </button>
             <a class="user-chip" href="{{ url_for('history') }}">
               <span class="avatar">{{ nav_user.full_name[0] }}</span>
               <span>{{ nav_user.username }}</span>

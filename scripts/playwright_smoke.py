@@ -302,6 +302,8 @@ def main():
                 expect(page.locator(".calendar-utility-bar")).to_contain_text("South Bay ED VL Schedule")
                 expect(page.locator(".calendar-utility-bar")).not_to_contain_text("Live Schedule")
                 expect(page.locator(".sidebar-links").get_by_role("link", name="South Bay ED VL Schedule")).to_be_visible()
+                expect(page.locator(".sidebar-links").get_by_role("link", name="Authorized Delegates")).to_have_count(0)
+                expect(page.locator(".sidebar-links").get_by_role("link", name="Holiday Trades")).to_have_count(0)
                 mini_prev_box = page.locator("#miniPrev").bounding_box()
                 mini_prev_year_box = page.locator("#miniPrevYear").bounding_box()
                 mini_next_box = page.locator("#miniNext").bounding_box()
@@ -551,6 +553,19 @@ def main():
                 page.wait_for_url(f"{BASE_URL}/login")
 
                 login(page, "pdoctor", "Reset12345!")
+                expect(page.locator("#settingsButton svg")).to_be_visible()
+                expect(page.locator(".sidebar-links").get_by_role("link", name="Authorized Delegates")).to_be_visible()
+                expect(page.locator(".sidebar-links").get_by_role("link", name="Holiday Trades")).to_be_visible()
+                expect(page.locator(".sidebar-links").get_by_role("button", name="Settings")).to_be_visible()
+                page.locator(".sidebar-links").get_by_role("button", name="Settings").click()
+                page.wait_for_selector("#settingsPanel:not(.hidden)")
+                page.locator('#settingsPanel [data-close-modal="settingsPanel"]').click()
+                page.locator(".sidebar-links").get_by_role("link", name="Authorized Delegates").click()
+                page.wait_for_url(re.compile(r"/history#delegationSection$"))
+                page.goto(f"{BASE_URL}/")
+                page.locator(".sidebar-links").get_by_role("link", name="Holiday Trades").click()
+                page.wait_for_url(re.compile(r"/history#tradeSection$"))
+                page.goto(f"{BASE_URL}/")
                 page.locator("#settingsButton").click()
                 page.wait_for_selector("#settingsPanel:not(.hidden)")
                 expect(page.locator('[data-settings-section="appearance"]')).to_be_visible()
@@ -842,6 +857,28 @@ def main():
                 assert visibility["bottomGap"] is not None and 4 <= visibility["bottomGap"] <= 22, visibility
                 assert max(visibility["openHeights"]) - min(visibility["openHeights"]) < 1.5, visibility
                 expect(page.locator(f'[data-day="{waitlist_day}"] .waitlist-badge')).to_have_text("W2")
+                page.locator(f'[data-day="{waitlist_day}"] .waitlist-badge').click()
+                page.wait_for_selector("#dayModal:not(.hidden)")
+                expect(page.locator("#dayModalContent")).to_contain_text("Queued")
+                expect(page.locator("#dayModalContent")).to_contain_text("#1")
+                expect(page.locator("#dayModalContent").get_by_role("button", name="Edit").first).to_be_visible()
+                page.locator('#dayModal [data-close-modal="dayModal"]').click()
+                logout(page)
+
+                login(page, "afifi", "ChangeMe123!")
+                page.goto(f"{BASE_URL}/")
+                navigate_mini_to(page, 2026, 9)
+                page.wait_for_selector(f'[data-day="{waitlist_day}"] .waitlist-badge')
+                page.locator(f'[data-day="{waitlist_day}"] .waitlist-badge').click()
+                page.wait_for_selector("#dayModal:not(.hidden)")
+                expect(page.locator("#dayModalContent")).to_contain_text("Queued")
+                expect(page.locator("#dayModalContent")).to_contain_text("#1")
+                page.locator('#dayModal [data-close-modal="dayModal"]').click()
+                logout(page)
+
+                login(page, "admin", "Admin123!")
+                page.goto(f"{BASE_URL}/")
+                navigate_mini_to(page, 2026, 9)
 
                 open_day_from_mini(page, waitlist_day)
                 expect(page.locator("#dayModalContent")).to_contain_text("Waitlist")
@@ -927,6 +964,10 @@ def main():
                 logout(page)
 
                 login(page, trade_target["username"], "ChangeMe123!")
+                expect(page.locator("#tradeNoticeMount")).to_be_visible()
+                expect(page.locator("#tradeNoticeMount")).to_contain_text("holiday trade request")
+                page.locator("#tradeNoticeMount a").click()
+                page.wait_for_url(re.compile(r"/history#tradeSection$"))
                 page.goto(f"{BASE_URL}/history")
                 accept_offer_row = page.locator(".trade-row", has_text="Accept this offer")
                 accept_offer_row.get_by_role("button", name="Accept").click()
@@ -942,6 +983,8 @@ def main():
                 page.wait_for_selector("#gameOverlay:not(.hidden)")
                 assert page.evaluate("() => window.__VACATION_SCHEDULER_STATE__.game.lives") == 3
                 assert page.evaluate("() => window.__VACATION_SCHEDULER_STATE__.game.bricks[0].label") != "VL"
+                assert page.evaluate("() => window.__VACATION_SCHEDULER_STATE__.game.bricks.find((brick) => brick.isGolden)?.label") == "24K"
+                assert page.evaluate("() => window.__VACATION_SCHEDULER_STATE__.game.bricks.find((brick) => brick.isGolden)?.color") == "#c68a00"
                 expect(page.locator("#gameHighScoreValue")).to_be_visible()
                 page.evaluate(
                     """

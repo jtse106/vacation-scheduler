@@ -17,6 +17,11 @@
   <nav class="sidebar-links card">
     <a class="{% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">South Bay ED VL Schedule</a>
     <a class="{% if request.endpoint == 'history' %}active{% endif %}" href="{{ url_for('history') }}">Request History</a>
+    {% if nav_user %}
+      <a href="{{ url_for('history') }}#delegationSection">Authorized Delegates</a>
+      <a href="{{ url_for('history') }}#tradeSection">Holiday Trades</a>
+      <button class="sidebar-link-button" type="button" data-open-settings="appearance">Settings</button>
+    {% endif %}
     <a class="{% if request.endpoint == 'holiday_rotation' %}active{% endif %}" href="{{ url_for('holiday_rotation') }}">Holiday Rotation</a>
     <a class="{% if request.endpoint == 'legacy_calendars' %}active{% endif %}" href="{{ url_for('legacy_calendars') }}">Legacy Calendars</a>
     <a class="{% if request.endpoint == 'instructions' %}active{% endif %}" href="{{ url_for('instructions') }}">Instructions</a>

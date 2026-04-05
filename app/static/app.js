@@ -11,6 +11,7 @@ const state = {
     rotationYears: window.APP_CONFIG.rotationYears || [],
     gameHighScore: window.APP_CONFIG.gameHighScore || null,
     gamePersonalBest: window.APP_CONFIG.gamePersonalBest || null,
+    pendingTradeNotice: window.APP_CONFIG.pendingTradeNotice || null,
   },
   editingRequestId: null,
   adminHolidaysYear: new Date().getFullYear(),
@@ -119,6 +120,35 @@ function setSettingsSection(section) {
 function openSettingsPanel(section = state.settings.activeSection) {
   setSettingsSection(section);
   openModal("settingsPanel");
+}
+
+function formatDateTime(value) {
+  if (!value) return "";
+  const normalized = value.includes("T") ? value : `${value}T00:00:00`;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function renderPendingTradeNotice() {
+  const mount = qs("#tradeNoticeMount");
+  if (!mount) return;
+  const notice = state.session.pendingTradeNotice;
+  if (!notice?.count) {
+    mount.classList.add("hidden");
+    mount.removeAttribute("data-trade-count");
+    mount.innerHTML = "";
+    return;
+  }
+  mount.classList.remove("hidden");
+  mount.dataset.tradeCount = String(notice.count);
+  mount.innerHTML = `<a href="${escapeHtml(notice.href || "/history#tradeSection")}">${escapeHtml(notice.message)}</a>`;
 }
 
 function showToast(message, type = "info") {
@@ -439,6 +469,7 @@ async function refreshSession() {
     rotationYears: data.rotationYears || [],
     gameHighScore: data.gameHighScore || data.highScore || null,
     gamePersonalBest: data.gamePersonalBest || data.personalBest || null,
+    pendingTradeNotice: data.pendingTradeNotice || null,
   };
   if (state.session.currentUser) {
     state.weekStart = state.session.currentUser.weekStart;
@@ -455,6 +486,7 @@ async function refreshSession() {
   populateDelegationSelect();
   populateTradeTargetUsers();
   renderBreakoutScoreboard();
+  renderPendingTradeNotice();
 }
 
 function populatePhysicianSelects() {
@@ -574,7 +606,9 @@ function renderCalendar(data) {
       if (day.waitlistCount) classNames.push("has-waitlist");
       if (selectedDates.has(day.date)) classNames.push("selected");
       const holidayBadge = day.isHoliday ? `<div class="holiday-pill">${escapeHtml(day.holiday.title)}</div>` : "";
-      const waitlistBadge = day.waitlistCount ? `<div class="waitlist-badge" title="${day.waitlistCount} waitlisted request${day.waitlistCount === 1 ? "" : "s"}">W${day.waitlistCount}</div>` : "";
+      const waitlistBadge = day.waitlistCount
+        ? `<span class="waitlist-badge" data-waitlist-badge="${day.date}" data-waitlist-day="${day.date}" title="${day.waitlistCount} waitlisted request${day.waitlistCount === 1 ? "" : "s"}">W${day.waitlistCount}</span>`
+        : "";
       const slots = day.isHoliday
         ? ""
         : day.slots.map((slot) => `<div class="slot-pill ${slot.occupied ? "occupied" : ""}" title="${escapeHtml(slot.name || "Open slot")}">${escapeHtml(slot.label || "")}</div>`).join("");
@@ -611,7 +645,7 @@ async function loadCalendar() {
   renderCalendar(data);
 }
 
-async function loadDayDetails(dayIso) {
+async function loadDayDetails(dayIso, options = {}) {
   const data = await fetchJson(`/api/day/${dayIso}`);
   state.dayRequests = [...(data.requests || []), ...(data.waitlistRequests || [])].map((item) => ({
     id: item.requestId,
@@ -639,34 +673,38 @@ async function loadDayDetails(dayIso) {
   if (!data.requests.length) {
     parts.push('<p class="empty-state">No physicians are scheduled off for this day.</p>');
   } else {
-      parts.push(
-        '<div class="stack"><h3>Scheduled</h3>',
-        data.requests.map((item) => `
-          <div class="detail-card">
-            <div>
-              <strong>${escapeHtml(item.physician)}</strong>
-              <div class="subtle">${escapeHtml(formatDateRange(item.startDate, item.endDate))}</div>
-              <div class="subtle">Scheduled by ${escapeHtml(item.requestedBy)}</div>
-            </div>
-            <div class="inline-actions">
-              <span class="status ${escapeHtml(item.status)}">${escapeHtml(item.status)}</span>
-              ${item.canManage ? `<button class="secondary-button" type="button" data-edit-request="${item.requestId}">Edit</button>` : ""}
-              ${item.canManage ? `<button class="secondary-button" type="button" data-remove-request-day="${item.requestId}" data-remove-day="${escapeHtml(data.date)}">Remove this day</button>` : ""}
-            </div>
+    parts.push(
+      '<div class="stack"><h3>Scheduled</h3>',
+      data.requests.map((item) => `
+        <div class="detail-card">
+          <div>
+            <strong>${escapeHtml(item.physician)}</strong>
+            <div class="subtle">${escapeHtml(formatDateRange(item.startDate, item.endDate))}</div>
+            <div class="subtle">Scheduled by ${escapeHtml(item.requestedBy)}</div>
           </div>
-        `).join(""),
-        "</div>"
-      );
+          <div class="inline-actions">
+            <span class="status ${escapeHtml(item.status)}">${escapeHtml(item.status)}</span>
+            ${item.canManage ? `<button class="secondary-button" type="button" data-edit-request="${item.requestId}">Edit</button>` : ""}
+            ${item.canManage ? `<button class="secondary-button" type="button" data-remove-request-day="${item.requestId}" data-remove-day="${escapeHtml(data.date)}">Remove this day</button>` : ""}
+          </div>
+        </div>
+      `).join(""),
+      "</div>"
+    );
   }
   if (data.waitlistRequests?.length) {
     parts.push(
-      '<div class="stack"><h3>Waitlist</h3>',
+      '<div class="stack" data-day-detail-section="waitlist"><h3>Waitlist</h3>',
       data.waitlistRequests.map((item) => `
         <div class="detail-card waitlist-card">
           <div>
             <strong>${escapeHtml(item.physician)}</strong>
             <div class="subtle">${escapeHtml(formatDateRange(item.startDate, item.endDate))}</div>
             <div class="subtle">Requested by ${escapeHtml(item.requestedBy)}</div>
+            <div class="subtle waitlist-meta-line">
+              <span class="doc-badge">#${escapeHtml(item.waitlistPosition || "")}</span>
+              <span>Queued ${escapeHtml(formatDateTime(item.createdAt))}</span>
+            </div>
           </div>
           <div class="inline-actions">
             <span class="status waitlisted">waitlisted</span>
@@ -680,6 +718,10 @@ async function loadDayDetails(dayIso) {
   }
   content.innerHTML = parts.join("");
   openModal("dayModal");
+  if (options.focusSection === "waitlist") {
+    const waitlistSection = content.querySelector('[data-day-detail-section="waitlist"], .waitlist-card');
+    waitlistSection?.scrollIntoView({ block: "start", behavior: "auto" });
+  }
 }
 
 function renderRequestList(target, requests, options = {}) {
@@ -853,8 +895,21 @@ async function loadTrades() {
   if (!list && !adminList) return;
   const data = await fetchJson("/api/trades");
   state.trades = data.trades;
+  const pendingIncoming = data.trades.filter(
+    (item) => item.status === "pending" && item.offeredToUserId === state.session.currentUser?.id
+  );
+  state.session.pendingTradeNotice = pendingIncoming.length
+    ? {
+        count: pendingIncoming.length,
+        href: "/history#tradeSection",
+        message: pendingIncoming.length === 1
+          ? "1 holiday trade request needs your response."
+          : `${pendingIncoming.length} holiday trade requests need your response.`,
+      }
+    : null;
   renderTrades(list, data.trades);
   renderTrades(adminList, data.trades);
+  renderPendingTradeNotice();
 }
 
 function openRequestModalForCreate() {
@@ -1225,6 +1280,14 @@ function startBreakoutGame() {
   const physicianNames = (state.session.physicianDirectory || currentManagedPhysicians())
     .map((person) => person.fullName.split(" ").slice(-1)[0])
     .filter(Boolean);
+  const trueRandom = () => {
+    if (window.crypto?.getRandomValues) {
+      const values = new Uint32Array(1);
+      window.crypto.getRandomValues(values);
+      return values[0] / 4294967296;
+    }
+    return Math.random();
+  };
   let seed = occupiedCells * 97 + state.month * 31 + state.year;
   const random = () => {
     seed = (seed * 1664525 + 1013904223) % 4294967296;
@@ -1240,7 +1303,7 @@ function startBreakoutGame() {
   const totalWidth = columns * brickWidth + (columns - 1) * gap;
   const startX = (canvas.width - totalWidth) / 2;
   const palette = ["#f4d35e", "#f08a5d", "#b83b5e", "#6a4c93", "#2a9d8f", "#3a86ff"];
-  const goldenBrickIndex = Math.floor(random() * brickCount);
+  const goldenBrickIndex = Math.floor(trueRandom() * brickCount);
   for (let index = 0; index < brickCount; index += 1) {
     const column = index % columns;
     const row = Math.floor(index / columns);
@@ -1251,8 +1314,8 @@ function startBreakoutGame() {
       height: brickHeight,
       alive: true,
       rotation: random() * 0.18 - 0.09,
-      color: index === goldenBrickIndex ? "#ffd166" : palette[index % palette.length],
-      label: index === goldenBrickIndex ? "GOLD" : physicianNames[index % Math.max(1, physicianNames.length)] || `Doc ${index + 1}`,
+      color: index === goldenBrickIndex ? "#c68a00" : palette[index % palette.length],
+      label: index === goldenBrickIndex ? "24K" : physicianNames[index % Math.max(1, physicianNames.length)] || `Doc ${index + 1}`,
       isGolden: index === goldenBrickIndex,
     });
   }
@@ -1375,7 +1438,7 @@ function startBreakoutGame() {
         ),
       );
     }
-    updateStatus("Golden bar hit. Multiball activated.");
+    updateStatus("Gold bar hit. Multiball activated.");
   }
 
   async function finalizeGame(message) {
@@ -1397,11 +1460,26 @@ function startBreakoutGame() {
       context.save();
       context.translate(brick.x + brick.width / 2, brick.y + brick.height / 2);
       context.rotate(brick.rotation);
-      context.fillStyle = brick.color;
+      if (brick.isGolden) {
+        const goldGradient = context.createLinearGradient(-brick.width / 2, -brick.height / 2, brick.width / 2, brick.height / 2);
+        goldGradient.addColorStop(0, "#fff2a6");
+        goldGradient.addColorStop(0.25, "#f2c94c");
+        goldGradient.addColorStop(0.55, "#d39b11");
+        goldGradient.addColorStop(1, "#8f6400");
+        context.fillStyle = goldGradient;
+      } else {
+        context.fillStyle = brick.color;
+      }
       context.fillRect(-brick.width / 2, -brick.height / 2, brick.width, brick.height);
-      context.strokeStyle = "rgba(255,255,255,0.45)";
+      if (brick.isGolden) {
+        context.fillStyle = "rgba(255, 255, 255, 0.34)";
+        context.fillRect(-brick.width / 2 + 10, -brick.height / 2 + 4, brick.width - 20, 4);
+        context.fillStyle = "rgba(111, 72, 0, 0.2)";
+        context.fillRect(-brick.width / 2 + 8, brick.height / 2 - 7, brick.width - 16, 3);
+      }
+      context.strokeStyle = brick.isGolden ? "rgba(125, 82, 0, 0.55)" : "rgba(255,255,255,0.45)";
       context.strokeRect(-brick.width / 2, -brick.height / 2, brick.width, brick.height);
-      context.fillStyle = "#0f1730";
+      context.fillStyle = brick.isGolden ? "#5f4100" : "#0f1730";
       context.font = "bold 12px Segoe UI";
       context.textAlign = "center";
       context.fillText(String(brick.label).slice(0, 11), 0, 4);
@@ -1565,7 +1643,9 @@ function attachGlobalEvents() {
     destroyGame();
   });
 
-  qs("#settingsButton")?.addEventListener("click", () => openSettingsPanel("appearance"));
+  qsa("[data-open-settings]").forEach((button) => {
+    button.addEventListener("click", () => openSettingsPanel(button.dataset.openSettings || "appearance"));
+  });
   qs("#openRequestModal")?.addEventListener("click", openRequestModalForCreate);
   qs("#openRequestModalInline")?.addEventListener("click", openRequestModalForCreate);
   qs("#openForgotPasswordModal")?.addEventListener("click", () => openModal("forgotPasswordModal"));
@@ -1657,6 +1737,7 @@ function attachGlobalEvents() {
   });
 
   document.body.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("[data-waitlist-badge]")) return;
     const dayButton = event.target.closest("[data-day]");
     if (!dayButton || !selectionEnabled() || event.button !== 0) return;
     state.selection.mouseDown = true;
@@ -1681,6 +1762,11 @@ function attachGlobalEvents() {
   document.body.addEventListener("click", async (event) => {
     if (selectionEnabled() && state.selection.suppressClick) {
       state.selection.suppressClick = false;
+      return;
+    }
+    const waitlistBadge = event.target.closest("[data-waitlist-badge]");
+    if (waitlistBadge) {
+      await loadDayDetails(waitlistBadge.dataset.waitlistDay, { focusSection: "waitlist" });
       return;
     }
     const dayButton = event.target.closest("[data-day]");

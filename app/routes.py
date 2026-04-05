@@ -360,6 +360,33 @@ def serialize_trade(row):
     }
 
 
+def _pending_trade_notice(actor):
+    if not actor:
+        return None
+    row = query_db(
+        """
+        SELECT COUNT(*) AS pending_count
+        FROM holiday_trade_offers
+        WHERE status = 'pending'
+          AND offered_to_user_id = ?
+        """,
+        (actor["id"],),
+        one=True,
+    )
+    pending_count = int(row["pending_count"] if row else 0)
+    if pending_count <= 0:
+        return None
+    return {
+        "count": pending_count,
+        "href": f"{url_for('history')}#tradeSection",
+        "message": (
+            "1 holiday trade request needs your response."
+            if pending_count == 1
+            else f"{pending_count} holiday trade requests need your response."
+        ),
+    }
+
+
 def _rotation_years():
     years = query_db("SELECT DISTINCT year FROM holiday_rotation_assignments ORDER BY year ASC")
     return [row["year"] for row in years]
@@ -763,12 +790,14 @@ def _remove_range_from_requests(actor, target_user_id: int, start_date: str, end
 def register_routes(app):
     @app.context_processor
     def inject_user():
+        actor = current_user()
         return {
-            "nav_user": current_user(),
+            "nav_user": actor,
             "nav_managed_physicians": _manageable_physicians_payload(),
             "nav_physician_directory": _physician_directory_payload(),
             "theme_options": theme_options_payload(),
-            "nav_breakout_scores": _breakout_score_payload(current_user()),
+            "nav_breakout_scores": _breakout_score_payload(actor),
+            "nav_pending_trade_notice": _pending_trade_notice(actor),
         }
 
     @app.route("/")
@@ -946,6 +975,7 @@ def register_routes(app):
                 "rotationYears": _rotation_years(),
                 "gameHighScore": breakout_scores["highScore"],
                 "gamePersonalBest": breakout_scores["personalBest"],
+                "pendingTradeNotice": _pending_trade_notice(actor),
             }
         )
 
@@ -1051,7 +1081,10 @@ def register_routes(app):
         actor = current_user()
         holiday = holiday_for_day(day_iso)
         scheduled_rows = requests_for_day(day_iso, statuses=("scheduled",))
-        waitlisted_rows = requests_for_day(day_iso, statuses=("waitlisted",))
+        waitlisted_rows = sorted(
+            requests_for_day(day_iso, statuses=("waitlisted",)),
+            key=lambda row: (row["created_at"] or "", row["id"]),
+        )
         return jsonify(
             {
                 "date": day_iso,
@@ -1082,9 +1115,11 @@ def register_routes(app):
                         "endDate": row["end_date"],
                         "status": row["status"],
                         "note": row["request_note"] or "",
+                        "createdAt": row["created_at"],
+                        "waitlistPosition": index,
                         "canManage": can_manage_request(actor, row),
                     }
-                    for row in waitlisted_rows
+                    for index, row in enumerate(waitlisted_rows, start=1)
                 ],
             }
         )

@@ -48,3 +48,18 @@ def legacy_calendar_for_year(year: int):
                 "column_count": column_count,
             }
     return None
+
+
+def legacy_snapshot_path(year: int) -> Path:
+    return LEGACY_DIR / f"VL Calendar {year} - Sheet1.csv"
+
+
+def write_legacy_calendar_matrix(year: int, matrix: dict):
+    LEGACY_DIR.mkdir(parents=True, exist_ok=True)
+    path = legacy_snapshot_path(year)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["Physician", *matrix["dates"]])
+        for row in matrix["rows"]:
+            writer.writerow([row["physician"], *row["cells"]])
+    return path
