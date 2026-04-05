@@ -42,6 +42,16 @@
                         <span class="rotation-name">{{ assignment.fullName }}</span>
                         <span class="rotation-note">{% if assignment.note %}{{ assignment.note }}{% endif %}</span>
                       </div>
+                      {% if nav_user and nav_user.role == 'admin' %}
+                        <label class="rotation-admin-editor">
+                          <span class="sr-only">Reassign {{ holiday.title }}</span>
+                          <select data-rotation-assignment="{{ assignment.id }}">
+                            {% for physician in nav_physician_directory %}
+                              <option value="{{ physician.id }}" {% if physician.id == assignment.userId %}selected{% endif %}>{{ physician.fullName }}</option>
+                            {% endfor %}
+                          </select>
+                        </label>
+                      {% endif %}
                     </div>
                   {% endfor %}
                 </div>

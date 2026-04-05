@@ -912,6 +912,19 @@ async function loadTrades() {
   renderPendingTradeNotice();
 }
 
+async function syncLiveScheduleFromLegacy() {
+  const result = await fetchJson("/api/legacy/sync", { method: "POST" });
+  showToast(result.message || "Live schedule synchronized from legacy calendars.", "success");
+  window.location.reload();
+}
+
+async function updateRotationAssignment(assignmentId, userId) {
+  const formData = new FormData();
+  formData.set("user_id", String(userId));
+  const result = await fetchJson(`/api/rotation/assignments/${assignmentId}`, { method: "POST", body: formData });
+  showToast(result.message || "Holiday rotation updated.", "success");
+}
+
 function openRequestModalForCreate() {
   if (!state.session.currentUser) {
     window.location.href = "/login";
@@ -1191,9 +1204,15 @@ function formatBreakoutScore(value) {
   return Number.isFinite(value) ? Math.max(0, Math.round(value)).toLocaleString() : "0";
 }
 
-function computeBreakoutScore({ brickCount, elapsedMs, paddleHits, livesLeft }) {
+function computeBreakoutScore({ brickCount, bricksRemaining, elapsedMs, paddleHits, livesLeft, tripleBallMs }) {
   const elapsedSeconds = elapsedMs / 1000;
-  return Math.max(0, Math.round(brickCount * 520 + livesLeft * 900 - elapsedSeconds * 42 - paddleHits * 28));
+  const tripleBallSeconds = tripleBallMs / 1000;
+  const countdown = 10000 - elapsedSeconds * 42;
+  const clearBonus = Math.max(0, brickCount - bricksRemaining) * 180;
+  const survivalBonus = tripleBallSeconds * 70;
+  const lifeBonus = livesLeft * 650;
+  const paddlePenalty = paddleHits * 18;
+  return Math.max(0, Math.round(countdown + clearBonus + survivalBonus + lifeBonus - paddlePenalty));
 }
 
 function renderBreakoutScoreboard(currentScore = null) {
@@ -1221,6 +1240,18 @@ function renderGameStatus(message) {
   if (status) status.textContent = message;
 }
 
+function triggerGameOverFlash() {
+  const flash = qs("#gameOverFlash");
+  if (!flash) return;
+  flash.classList.remove("hidden");
+  flash.setAttribute("aria-hidden", "false");
+  window.clearTimeout(state.game?.gameOverFlashTimer);
+  state.game.gameOverFlashTimer = window.setTimeout(() => {
+    flash.classList.add("hidden");
+    flash.setAttribute("aria-hidden", "true");
+  }, 1850);
+}
+
 function clearConfetti() {
   const layer = qs("#confettiLayer");
   if (!layer) return;
@@ -1246,7 +1277,10 @@ function destroyGame() {
   if (state.game?.frameId) {
     cancelAnimationFrame(state.game.frameId);
   }
+  window.clearTimeout(state.game?.gameOverFlashTimer);
   clearConfetti();
+  qs("#gameOverFlash")?.classList.add("hidden");
+  qs("#gameOverFlash")?.setAttribute("aria-hidden", "true");
   state.game = null;
   renderBreakoutScoreboard(0);
 }
@@ -1340,10 +1374,13 @@ function startBreakoutGame() {
     bricks,
     goldenActivated: false,
     startedAt: performance.now(),
+    lastTickAt: performance.now(),
     elapsedMs: 0,
+    tripleBallMs: 0,
     paddleHits: 0,
     score: 0,
     scoreSubmitted: false,
+    gameOverFlashTimer: null,
   };
   Object.defineProperties(game, {
     ballX: {
@@ -1366,12 +1403,19 @@ function startBreakoutGame() {
   state.game = game;
 
   function updateLiveScore() {
-    game.elapsedMs = Math.max(1, performance.now() - game.startedAt);
+    const now = performance.now();
+    game.elapsedMs = Math.max(1, now - game.startedAt);
+    if (!game.won && !game.lost && game.balls.length >= 3) {
+      game.tripleBallMs += Math.max(0, now - (game.lastTickAt || now));
+    }
+    game.lastTickAt = now;
     game.score = computeBreakoutScore({
       brickCount: game.bricks.length,
+      bricksRemaining: game.bricks.filter((brick) => brick.alive).length,
       elapsedMs: game.elapsedMs,
       paddleHits: game.paddleHits,
       livesLeft: game.lives,
+      tripleBallMs: game.tripleBallMs,
     });
     renderBreakoutScoreboard(game.score);
   }
@@ -1547,6 +1591,7 @@ function startBreakoutGame() {
           explodeBall(ball);
           if (game.lives <= 0 && game.balls.length === 0) {
             game.lost = true;
+            triggerGameOverFlash();
             finalizeGame("You lost. You need to go see more patients.");
             break;
           }
@@ -1649,6 +1694,10 @@ function attachGlobalEvents() {
   qs("#openRequestModal")?.addEventListener("click", openRequestModalForCreate);
   qs("#openRequestModalInline")?.addEventListener("click", openRequestModalForCreate);
   qs("#openForgotPasswordModal")?.addEventListener("click", () => openModal("forgotPasswordModal"));
+  qs("#syncLegacyScheduleButton")?.addEventListener("click", async () => {
+    if (!window.confirm("Replace the live schedule with the legacy calendar truth? A backup snapshot will be saved first.")) return;
+    await syncLiveScheduleFromLegacy();
+  });
   qs("#assignSelectionButton")?.addEventListener("click", assignSelectedRange);
   qs("#unassignSelectionButton")?.addEventListener("click", unassignSelectedRange);
   qs("#userProvisioningManualToggle")?.addEventListener("change", syncUserCreateProvisioningMode);
@@ -1756,6 +1805,16 @@ function attachGlobalEvents() {
       state.selection.didDrag = true;
       syncSelectionHighlights();
       renderSelectionToolbar();
+    }
+  });
+
+  document.body.addEventListener("change", async (event) => {
+    const rotationSelect = event.target.closest("[data-rotation-assignment]");
+    if (!rotationSelect) return;
+    try {
+      await updateRotationAssignment(rotationSelect.dataset.rotationAssignment, rotationSelect.value);
+    } catch (error) {
+      showToast(error?.message || String(error), "error");
     }
   });
 

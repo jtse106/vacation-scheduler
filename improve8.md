@@ -45,14 +45,14 @@ X make the waitlist visible (with order and timestamps -- unobtrusive timestamps
 
 X make the gold bar in the easter egg breakout game more randomly placed, and make it truly gold colored instead of just yellow. make it look like a gold bar.
 
-when you lose in the breakout game, it should flash game over across the screen
+X when you lose in the breakout game, it should flash game over across the screen
 
-also, reset the high score to zero. and make the score countdown count down from 10000. and make your score go higher the longer you keep all 3 balls alive.
+X also, reset the high score to zero. and make the score countdown count down from 10000. and make your score go higher the longer you keep all 3 balls alive.
 
-the gear looks wierd in the settings in upper right button. use playwright to look at it and fix it with a better gear icon.
+X the gear looks wierd in the settings in upper right button. use playwright to look at it and fix it with a better gear icon.
 
-there's a problem with the waitlist, if a User selects multiple dates and some of the dates Have all of their slots full But some of the selected dates are not completely filled, when you Click to assign yourself to these shifts. The dates that are completely filled should be put on the wait list but the dates that have openings that doctor should be assigned to those open slots. As it stands currently the Doctor is just assigned to the wait list across the entire selection even if a portion of the selection has open slots.
+X there's a problem with the waitlist, if a User selects multiple dates and some of the dates Have all of their slots full But some of the selected dates are not completely filled, when you Click to assign yourself to these shifts. The dates that are completely filled should be put on the wait list but the dates that have openings that doctor should be assigned to those open slots. As it stands currently the Doctor is just assigned to the wait list across the entire selection even if a portion of the selection has open slots.
 
-But there should be a way for the administrator to manually edit the holiday rotation schedule.
+X But there should be a way for the administrator to manually edit the holiday rotation schedule.
 
-The legacy VL calendars are considered a truth as of April 4th 2026. There should be a button on the legacy VL calendar section to synchronize the current schedule to the legacy VL calendars. A copy of the current actual schedule should be saved into the database in case it needs to be restored at a later point. everything should be logged appropriately.
+X The legacy VL calendars are considered a truth as of April 4th 2026. There should be a button on the legacy VL calendar section to synchronize the current schedule to the legacy VL calendars. A copy of the current actual schedule should be saved into the database in case it needs to be restored at a later point. everything should be logged appropriately.

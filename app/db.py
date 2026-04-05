@@ -190,6 +190,16 @@ CREATE TABLE IF NOT EXISTS breakout_scores (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS schedule_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_type TEXT NOT NULL,
+    label TEXT,
+    payload_json TEXT NOT NULL,
+    actor_user_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
 """
 
 
@@ -219,6 +229,7 @@ def init_db(app):
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_vacation_requests_user ON vacation_requests(user_id, status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_holiday_definitions_dates ON holiday_definitions(start_date, end_date)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_breakout_scores_score ON breakout_scores(score DESC, elapsed_ms ASC, paddle_hits ASC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedule_snapshots_type_created ON schedule_snapshots(snapshot_type, created_at DESC)")
         _normalize_existing_records(db)
         ensure_holiday_definitions(date.today().year - 1, date.today().year + 2)
         db.commit()

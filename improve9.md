@@ -1,0 +1,1 @@
+can you give me some instructions to host this code on my oracle VM free tier server in a docker file? i have

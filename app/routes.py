@@ -1,6 +1,7 @@
 import calendar
 import csv
 import io
+import json
 import re
 import secrets
 from datetime import date, datetime, timedelta
@@ -25,6 +26,7 @@ from .db import (
     can_manage_physician,
     can_manage_request,
     daterange,
+    default_email_for_username,
     deleted_email_placeholder,
     deleted_username_placeholder,
     execute_db,
@@ -40,11 +42,17 @@ from .db import (
     record_activity,
     requests_for_day,
     requests_overlapping_range,
+    slugify_name,
     validate_request_window,
     verify_password,
     waitlist_counts_for_month,
 )
-from .legacy_calendar import legacy_calendar_for_year, legacy_calendar_years, legacy_documents
+from .legacy_calendar import (
+    legacy_calendar_for_year,
+    legacy_calendar_years,
+    legacy_documents,
+    parse_legacy_schedule_documents,
+)
 from .llm import explain_conflict_naturally, parse_natural_language_request
 from .mailer import send_email
 from .themes import THEME_CHOICES, theme_options_payload
@@ -475,7 +483,7 @@ def _rotation_view_model(selected_year: int):
     for row in rows:
         holiday = group[row["category"]][row["holiday_key"]]
         holiday["title"] = row["holiday_title"]
-        holiday["assignments"].append({"fullName": row["full_name"], "userId": row["user_id"], "note": row["note"] or ""})
+        holiday["assignments"].append({"id": row["id"], "fullName": row["full_name"], "userId": row["user_id"], "note": row["note"] or ""})
     return [
         {"category": "major", "title": "Major Holidays", "holidays": [group["major"][key] for key in MAJOR_HOLIDAYS]},
         {"category": "minor", "title": "Minor Holidays", "holidays": [group["minor"][key] for key in MINOR_HOLIDAYS]},
@@ -632,6 +640,63 @@ def _waitlist_decision_note(full_days: list[str]):
     return f"Waitlisted because all vacation slots were filled for: {preview}{suffix}"
 
 
+def _group_request_segments(start_date: str, end_date: str, full_days: list[str]):
+    full_day_set = set(full_days)
+    segments = []
+    segment_start = None
+    segment_status = None
+    previous_day = None
+    for day_iso in daterange(start_date, end_date):
+        status = "waitlisted" if day_iso in full_day_set else "scheduled"
+        if segment_status is None:
+            segment_status = status
+            segment_start = day_iso
+            previous_day = day_iso
+            continue
+        if status != segment_status:
+            segments.append({"startDate": segment_start, "endDate": previous_day, "status": segment_status})
+            segment_start = day_iso
+            segment_status = status
+        previous_day = day_iso
+    if segment_status is not None:
+        segments.append({"startDate": segment_start, "endDate": previous_day, "status": segment_status})
+    return segments
+
+
+def _decision_note_for_segment(segment, full_days: list[str]):
+    if segment["status"] != "waitlisted":
+        return ""
+    covered = [day_iso for day_iso in full_days if segment["startDate"] <= day_iso <= segment["endDate"]]
+    return _waitlist_decision_note(covered)
+
+
+def _request_message_for_segments(segments):
+    if not segments:
+        return "No vacation segments were created."
+    statuses = {segment["status"] for segment in segments}
+    if statuses == {"scheduled"}:
+        return "Vacation scheduled."
+    if statuses == {"waitlisted"}:
+        return segments[0]["decision_note"]
+    scheduled_count = sum(1 for segment in segments if segment["status"] == "scheduled")
+    waitlist_count = sum(1 for segment in segments if segment["status"] == "waitlisted")
+    return f"Vacation scheduled for open dates and waitlisted for full dates ({scheduled_count} scheduled segment{'s' if scheduled_count != 1 else ''}, {waitlist_count} waitlisted segment{'s' if waitlist_count != 1 else ''})."
+
+
+def _build_request_segments(user_id: int, start_date: str, end_date: str, *, exclude_request_id: int | None = None):
+    validation = validate_request_window(
+        user_id,
+        start_date,
+        end_date,
+        exclude_request_id=exclude_request_id,
+        allow_full_days=True,
+    )
+    segments = _group_request_segments(start_date, end_date, validation["full_days"])
+    for segment in segments:
+        segment["decision_note"] = _decision_note_for_segment(segment, validation["full_days"])
+    return {"segments": segments, "full_days": validation["full_days"], "message": _request_message_for_segments(segments)}
+
+
 def _resolve_request_status(user_id: int, start_date: str, end_date: str, *, exclude_request_id: int | None = None):
     validation = validate_request_window(
         user_id,
@@ -643,6 +708,133 @@ def _resolve_request_status(user_id: int, start_date: str, end_date: str, *, exc
     if validation["full_days"]:
         return {"status": "waitlisted", "decision_note": _waitlist_decision_note(validation["full_days"])}
     return {"status": "scheduled", "decision_note": ""}
+
+
+def _ensure_physician_record(db, full_name: str):
+    normalized = "".join(ch.lower() for ch in full_name if ch.isalnum())
+    existing = db.execute(
+        """
+        SELECT id, username, full_name
+        FROM users
+        WHERE role = 'physician' AND deleted_at IS NULL AND lower(replace(replace(full_name, ' ', ''), '/', '')) = ?
+        """,
+        (normalized,),
+    ).fetchone()
+    if existing:
+        return existing
+    base = slugify_name(full_name)
+    candidate = base
+    suffix = 2
+    while db.execute("SELECT id FROM users WHERE username = ?", (candidate,)).fetchone():
+        candidate = f"{base}{suffix}"
+        suffix += 1
+    db.execute(
+        """
+        INSERT INTO users (username, full_name, email, password_hash, role, is_active, annual_day_limit)
+        VALUES (?, ?, ?, ?, 'physician', 1, 0)
+        """,
+        (candidate, full_name, default_email_for_username(candidate), hash_password("ChangeMe123!")),
+    )
+    return db.execute("SELECT id, username, full_name FROM users WHERE username = ?", (candidate,)).fetchone()
+
+
+def _snapshot_live_schedule(db, actor_id: int | None, *, snapshot_type: str, label: str):
+    rows = db.execute(
+        """
+        SELECT vr.*, COALESCE(vr.request_display_name, u.full_name) AS full_name, u.username
+        FROM vacation_requests vr
+        LEFT JOIN users u ON u.id = vr.user_id
+        ORDER BY vr.start_date ASC, vr.end_date ASC, vr.id ASC
+        """
+    ).fetchall()
+    payload = [
+        {
+            "id": row["id"],
+            "userId": row["user_id"],
+            "username": row["username"],
+            "fullName": row["full_name"],
+            "displayName": row["request_display_name"],
+            "startDate": row["start_date"],
+            "endDate": row["end_date"],
+            "status": row["status"],
+            "requestNote": row["request_note"],
+            "sourceType": row["source_type"],
+            "decisionNote": row["decision_note"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+        for row in rows
+    ]
+    return db.execute(
+        """
+        INSERT INTO schedule_snapshots (snapshot_type, label, payload_json, actor_user_id, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (snapshot_type, label, json.dumps(payload), actor_id, iso_now()),
+    ).lastrowid
+
+
+def _sync_live_schedule_from_legacy(actor):
+    db = get_db()
+    known_names = {
+        "".join(ch.lower() for ch in row["full_name"] if ch.isalnum()): row["full_name"]
+        for row in query_db("SELECT full_name FROM users WHERE role = 'physician' AND deleted_at IS NULL")
+    }
+    parsed = parse_legacy_schedule_documents(known_names)
+    snapshot_id = _snapshot_live_schedule(
+        db,
+        actor["id"] if actor else None,
+        snapshot_type="pre-legacy-sync",
+        label=f"Live schedule before legacy sync on {date.today().isoformat()}",
+    )
+    db.execute("DELETE FROM vacation_requests")
+
+    created_users = []
+    imported_ranges = 0
+    for full_name, ranges in parsed["ranges_by_name"].items():
+        user_row = _ensure_physician_record(db, full_name)
+        if user_row["full_name"] == full_name and full_name not in known_names.values():
+            created_users.append(full_name)
+        for start_iso, end_iso in ranges:
+            db.execute(
+                """
+                INSERT INTO vacation_requests
+                (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, decision_note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'scheduled', ?, 'legacy-sync', ?, ?, ?)
+                """,
+                (
+                    user_row["id"],
+                    actor["id"] if actor else None,
+                    full_name,
+                    start_iso,
+                    end_iso,
+                    "Imported from legacy calendar truth.",
+                    "",
+                    iso_now(),
+                    iso_now(),
+                ),
+            )
+            imported_ranges += 1
+    db.commit()
+    record_activity(
+        actor["id"] if actor else None,
+        "legacy-sync",
+        f"{actor['full_name'] if actor else 'System'} synchronized the live schedule from legacy calendars.",
+        "schedule_snapshot",
+        snapshot_id,
+        changes=[
+            {"field_name": "snapshot_id", "old_value": None, "new_value": snapshot_id},
+            {"field_name": "imported_range_count", "old_value": None, "new_value": imported_ranges},
+            {"field_name": "created_placeholder_users", "old_value": None, "new_value": ", ".join(created_users)},
+            {"field_name": "unresolved_legacy_labels", "old_value": None, "new_value": json.dumps(parsed["unresolved_labels"], sort_keys=True)},
+        ],
+    )
+    return {
+        "snapshotId": snapshot_id,
+        "importedRangeCount": imported_ranges,
+        "createdUsers": created_users,
+        "unresolvedLabels": parsed["unresolved_labels"],
+    }
 
 
 def _promote_waitlisted_requests():
@@ -928,12 +1120,17 @@ def register_routes(app):
         if years and selected_year not in years:
             selected_year = years[-1]
         calendar_data = legacy_calendar_for_year(selected_year) if years else None
+        latest_snapshot = query_db(
+            "SELECT * FROM schedule_snapshots WHERE snapshot_type = 'pre-legacy-sync' ORDER BY created_at DESC, id DESC LIMIT 1",
+            one=True,
+        )
         return render_template(
             "legacy_calendars.html",
             legacy_years=years,
             selected_year=selected_year,
             calendar_data=calendar_data,
             legacy_documents=legacy_documents(),
+            latest_schedule_snapshot=latest_snapshot,
         )
 
     @app.route("/vacation-guidelines")
@@ -962,6 +1159,22 @@ def register_routes(app):
             if document["file_name"] == file_name:
                 return send_file(document["path"], as_attachment=True, download_name=document["file_name"])
         abort(404)
+
+    @app.post("/api/legacy/sync")
+    @login_required
+    def api_legacy_sync():
+        actor = current_user()
+        if actor["role"] != "admin":
+            return jsonify({"error": "Only admins can sync the live schedule from legacy calendars."}), 403
+        result = _sync_live_schedule_from_legacy(actor)
+        return jsonify(
+            {
+                "message": f"Live schedule synchronized from legacy calendars. Imported {result['importedRangeCount']} request ranges.",
+                "snapshotId": result["snapshotId"],
+                "createdUsers": result["createdUsers"],
+                "unresolvedLabels": result["unresolvedLabels"],
+            }
+        )
 
     @app.get("/api/session")
     def api_session():
@@ -1154,54 +1367,57 @@ def register_routes(app):
         end_date = request.form.get("end_date", "").strip()
         note = request.form.get("request_note", "").strip()
         try:
-            resolution = _resolve_request_status(target_user_id, start_date, end_date)
+            request_plan = _build_request_segments(target_user_id, start_date, end_date)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
         target_user = query_db("SELECT * FROM users WHERE id = ?", (target_user_id,), one=True)
-        request_id = execute_db(
-            """
-            INSERT INTO vacation_requests
-            (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, decision_note, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?)
-            """,
-            (
-                target_user_id,
+        created_rows = []
+        for segment in request_plan["segments"]:
+            request_id = execute_db(
+                """
+                INSERT INTO vacation_requests
+                (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, decision_note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?)
+                """,
+                (
+                    target_user_id,
+                    actor["id"],
+                    target_user["full_name"],
+                    segment["startDate"],
+                    segment["endDate"],
+                    segment["status"],
+                    note,
+                    segment["decision_note"],
+                    iso_now(),
+                    iso_now(),
+                ),
+            )
+            created_rows.append(_request_row(request_id))
+            record_activity(
                 actor["id"],
-                target_user["full_name"],
-                start_date,
-                end_date,
-                resolution["status"],
-                note,
-                resolution["decision_note"],
-                iso_now(),
-                iso_now(),
-            ),
-        )
-        record_activity(
-            actor["id"],
-            "vacation-created" if resolution["status"] == "scheduled" else "vacation-waitlisted",
-            (
-                f"{actor['full_name']} scheduled vacation for {target_user['full_name']} from {start_date} to {end_date}."
-                if resolution["status"] == "scheduled"
-                else f"{actor['full_name']} waitlisted vacation for {target_user['full_name']} from {start_date} to {end_date}."
-            ),
-            "vacation_request",
-            request_id,
-            changes=[
-                {"field_name": "user_id", "old_value": None, "new_value": target_user_id},
-                {"field_name": "start_date", "old_value": None, "new_value": start_date},
-                {"field_name": "end_date", "old_value": None, "new_value": end_date},
-                {"field_name": "request_note", "old_value": None, "new_value": note},
-                {"field_name": "status", "old_value": None, "new_value": resolution["status"]},
-                {"field_name": "decision_note", "old_value": None, "new_value": resolution["decision_note"]},
-            ],
-        )
-        row = _request_row(request_id)
+                "vacation-created" if segment["status"] == "scheduled" else "vacation-waitlisted",
+                (
+                    f"{actor['full_name']} scheduled vacation for {target_user['full_name']} from {segment['startDate']} to {segment['endDate']}."
+                    if segment["status"] == "scheduled"
+                    else f"{actor['full_name']} waitlisted vacation for {target_user['full_name']} from {segment['startDate']} to {segment['endDate']}."
+                ),
+                "vacation_request",
+                request_id,
+                changes=[
+                    {"field_name": "user_id", "old_value": None, "new_value": target_user_id},
+                    {"field_name": "start_date", "old_value": None, "new_value": segment["startDate"]},
+                    {"field_name": "end_date", "old_value": None, "new_value": segment["endDate"]},
+                    {"field_name": "request_note", "old_value": None, "new_value": note},
+                    {"field_name": "status", "old_value": None, "new_value": segment["status"]},
+                    {"field_name": "decision_note", "old_value": None, "new_value": segment["decision_note"]},
+                ],
+            )
         return jsonify(
             {
-                "request": serialize_request(row),
-                "message": "Vacation scheduled." if resolution["status"] == "scheduled" else resolution["decision_note"],
+                "request": serialize_request(created_rows[0]) if created_rows else None,
+                "requests": [serialize_request(row) for row in created_rows],
+                "message": request_plan["message"],
             }
         )
 
@@ -1293,7 +1509,7 @@ def register_routes(app):
         action = parsed["action"]
         if action == "create":
             try:
-                resolution = _resolve_request_status(parsed["physicianId"], parsed["startDate"], parsed["endDate"])
+                request_plan = _build_request_segments(parsed["physicianId"], parsed["startDate"], parsed["endDate"])
             except ValueError as exc:
                 message = explain_conflict_naturally(prompt_text, str(exc))
                 record_activity(
@@ -1316,57 +1532,60 @@ def register_routes(app):
                 return jsonify({"error": message, "parsed": parsed}), 400
 
             target_user = query_db("SELECT * FROM users WHERE id = ?", (parsed["physicianId"],), one=True)
-            request_id = execute_db(
-                """
-                INSERT INTO vacation_requests
-                (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, source_prompt, source_response, decision_note, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'assistant', ?, ?, ?, ?, ?)
-                """,
-                (
-                    parsed["physicianId"],
+            created_rows = []
+            for segment in request_plan["segments"]:
+                request_id = execute_db(
+                    """
+                    INSERT INTO vacation_requests
+                    (user_id, created_by_user_id, request_display_name, start_date, end_date, status, request_note, source_type, source_prompt, source_response, decision_note, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'assistant', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        parsed["physicianId"],
+                        actor["id"],
+                        target_user["full_name"],
+                        segment["startDate"],
+                        segment["endDate"],
+                        segment["status"],
+                        parsed["note"],
+                        prompt_text,
+                        parsed["explanation"],
+                        segment["decision_note"],
+                        iso_now(),
+                        iso_now(),
+                    ),
+                )
+                created_rows.append(_request_row(request_id))
+                record_activity(
                     actor["id"],
-                    target_user["full_name"],
-                    parsed["startDate"],
-                    parsed["endDate"],
-                    resolution["status"],
-                    parsed["note"],
-                    prompt_text,
-                    parsed["explanation"],
-                    resolution["decision_note"],
-                    iso_now(),
-                    iso_now(),
-                ),
-            )
-            record_activity(
-                actor["id"],
-                "assistant-request-created" if resolution["status"] == "scheduled" else "assistant-request-waitlisted",
-                (
-                    f"Assistant scheduled vacation for {target_user['full_name']} from {parsed['startDate']} to {parsed['endDate']}."
-                    if resolution["status"] == "scheduled"
-                    else f"Assistant waitlisted vacation for {target_user['full_name']} from {parsed['startDate']} to {parsed['endDate']}."
-                ),
-                "vacation_request",
-                request_id,
-                changes=[
-                    {"field_name": "source_type", "old_value": None, "new_value": "assistant"},
-                    {"field_name": "source_prompt", "old_value": None, "new_value": prompt_text},
-                    {"field_name": "source_response", "old_value": None, "new_value": parsed["explanation"]},
-                    {"field_name": "assistant_parser_mode", "old_value": None, "new_value": parsed.get("parserMode")},
-                    {"field_name": "assistant_prompt_block", "old_value": None, "new_value": parsed.get("assistantPromptBlock")},
-                    {"field_name": "assistant_raw_response", "old_value": None, "new_value": parsed.get("assistantRawResponse")},
-                    {"field_name": "parsed_payload", "old_value": None, "new_value": str(parsed)},
-                    {"field_name": "start_date", "old_value": None, "new_value": parsed["startDate"]},
-                    {"field_name": "end_date", "old_value": None, "new_value": parsed["endDate"]},
-                    {"field_name": "status", "old_value": None, "new_value": resolution["status"]},
-                    {"field_name": "decision_note", "old_value": None, "new_value": resolution["decision_note"]},
-                ],
-            )
-            row = _request_row(request_id)
+                    "assistant-request-created" if segment["status"] == "scheduled" else "assistant-request-waitlisted",
+                    (
+                        f"Assistant scheduled vacation for {target_user['full_name']} from {segment['startDate']} to {segment['endDate']}."
+                        if segment["status"] == "scheduled"
+                        else f"Assistant waitlisted vacation for {target_user['full_name']} from {segment['startDate']} to {segment['endDate']}."
+                    ),
+                    "vacation_request",
+                    request_id,
+                    changes=[
+                        {"field_name": "source_type", "old_value": None, "new_value": "assistant"},
+                        {"field_name": "source_prompt", "old_value": None, "new_value": prompt_text},
+                        {"field_name": "source_response", "old_value": None, "new_value": parsed["explanation"]},
+                        {"field_name": "assistant_parser_mode", "old_value": None, "new_value": parsed.get("parserMode")},
+                        {"field_name": "assistant_prompt_block", "old_value": None, "new_value": parsed.get("assistantPromptBlock")},
+                        {"field_name": "assistant_raw_response", "old_value": None, "new_value": parsed.get("assistantRawResponse")},
+                        {"field_name": "parsed_payload", "old_value": None, "new_value": str(parsed)},
+                        {"field_name": "start_date", "old_value": None, "new_value": segment["startDate"]},
+                        {"field_name": "end_date", "old_value": None, "new_value": segment["endDate"]},
+                        {"field_name": "status", "old_value": None, "new_value": segment["status"]},
+                        {"field_name": "decision_note", "old_value": None, "new_value": segment["decision_note"]},
+                    ],
+                )
             return jsonify(
                 {
-                    "request": serialize_request(row),
-                    "parsed": parsed | {"explanation": resolution["decision_note"] or parsed["explanation"]},
-                    "message": "Vacation scheduled." if resolution["status"] == "scheduled" else resolution["decision_note"],
+                    "request": serialize_request(created_rows[0]) if created_rows else None,
+                    "requests": [serialize_request(row) for row in created_rows],
+                    "parsed": parsed | {"explanation": request_plan["message"] or parsed["explanation"]},
+                    "message": request_plan["message"],
                 }
             )
 
@@ -1877,6 +2096,44 @@ def register_routes(app):
                 for row in _trade_candidate_holidays(actor["id"], selected_year)
             ]
         return jsonify({"years": years, "selectedYear": selected_year, "groups": _rotation_view_model(selected_year), "myHolidays": user_holidays})
+
+    @app.post("/api/rotation/assignments/<int:assignment_id>")
+    @login_required
+    def api_update_rotation_assignment(assignment_id: int):
+        actor = current_user()
+        if actor["role"] != "admin":
+            return jsonify({"error": "Only admins can edit holiday rotation assignments."}), 403
+        new_user_id = _parse_int(request.form.get("user_id"))
+        if not new_user_id:
+            return jsonify({"error": "A physician is required."}), 400
+        assignment = query_db("SELECT * FROM holiday_rotation_assignments WHERE id = ?", (assignment_id,), one=True)
+        if not assignment:
+            abort(404)
+        user_row = query_db(
+            "SELECT id, full_name FROM users WHERE id = ? AND role = 'physician' AND deleted_at IS NULL",
+            (new_user_id,),
+            one=True,
+        )
+        if not user_row:
+            return jsonify({"error": "The selected physician is not available."}), 400
+        if assignment["user_id"] == new_user_id:
+            return jsonify({"message": "Holiday rotation already matched that physician.", "groups": _rotation_view_model(assignment["year"])})
+        execute_db(
+            "UPDATE holiday_rotation_assignments SET user_id = ?, updated_at = ? WHERE id = ?",
+            (new_user_id, iso_now(), assignment_id),
+        )
+        record_activity(
+            actor["id"],
+            "holiday-rotation-edited",
+            f"{actor['full_name']} reassigned {assignment['holiday_title']} for {assignment['year']}.",
+            "holiday_rotation_assignment",
+            assignment_id,
+            changes=[
+                {"field_name": "user_id", "old_value": assignment["user_id"], "new_value": new_user_id},
+                {"field_name": "holiday_key", "old_value": assignment["holiday_key"], "new_value": assignment["holiday_key"]},
+            ],
+        )
+        return jsonify({"message": f"{assignment['holiday_title']} reassigned to {user_row['full_name']}.", "groups": _rotation_view_model(assignment["year"])})
 
     @app.get("/api/trades")
     @login_required

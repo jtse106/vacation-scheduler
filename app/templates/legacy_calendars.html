@@ -12,12 +12,20 @@
             <h1>Legacy VL calendars</h1>
             <p class="subtle">Browse historical schedules alongside the live application.</p>
           </div>
+          {% if nav_user and nav_user.role == 'admin' %}
+            <div class="inline-actions">
+              <button id="syncLegacyScheduleButton" class="primary-button" type="button">Sync Live Schedule From Legacy</button>
+            </div>
+          {% endif %}
         </div>
         <div class="year-toggle-row">
           {% for year in legacy_years %}
             <a class="secondary-button year-toggle-button {% if year == selected_year %}active{% endif %}" href="{{ url_for('legacy_calendars', year=year) }}">{{ year }}</a>
           {% endfor %}
         </div>
+        {% if latest_schedule_snapshot %}
+          <p class="subtle">Last live-schedule backup before sync: {{ latest_schedule_snapshot.created_at }}</p>
+        {% endif %}
       </section>
 
       <section class="card page-panel">
