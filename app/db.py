@@ -196,6 +196,14 @@ CREATE TABLE IF NOT EXISTS breakout_scores (
 REQUEST_ACTIVE_STATUSES = ("scheduled",)
 
 
+def deleted_username_placeholder(user_id: int) -> str:
+    return f"deleted_user_{user_id}"
+
+
+def deleted_email_placeholder(user_id: int) -> str:
+    return f"deleted+user-{user_id}@deleted.local"
+
+
 def iso_now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
@@ -250,6 +258,7 @@ def _ensure_columns(db: sqlite3.Connection):
 
 
 def _normalize_existing_records(db: sqlite3.Connection):
+    _release_deleted_user_identifiers(db)
     db.execute("UPDATE vacation_requests SET status = 'scheduled' WHERE status IN ('requested', 'confirmed')")
     db.execute("UPDATE vacation_requests SET status = 'canceled' WHERE status IN ('withdrawn', 'unavailable')")
     db.execute(
@@ -276,6 +285,21 @@ def _normalize_existing_records(db: sqlite3.Connection):
         END
         """
     )
+
+
+def _release_deleted_user_identifiers(db: sqlite3.Connection):
+    deleted_users = db.execute(
+        "SELECT id, username, email FROM users WHERE deleted_at IS NOT NULL"
+    ).fetchall()
+    for row in deleted_users:
+        archived_username = deleted_username_placeholder(row["id"])
+        archived_email = deleted_email_placeholder(row["id"])
+        if row["username"] == archived_username and row["email"] == archived_email:
+            continue
+        db.execute(
+            "UPDATE users SET username = ?, email = ?, is_active = 0 WHERE id = ?",
+            (archived_username, archived_email, row["id"]),
+        )
 
 
 def get_db():
@@ -593,6 +617,9 @@ def validate_request_window(
         raise ValueError("Start and end dates are required.")
     if end_date < start_date:
         raise ValueError("End date must be on or after the start date.")
+    latest_allowed = date.today() + timedelta(days=366)
+    if date.fromisoformat(start_date) > latest_allowed or date.fromisoformat(end_date) > latest_allowed:
+        raise ValueError("Vacation can only be added up to 1 year in advance.")
 
     holiday_rows = holiday_rows_between(start_date, end_date)
     if holiday_rows:

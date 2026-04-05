@@ -7,32 +7,6 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body class="page-{{ request.endpoint or 'unknown' }}" data-theme="{{ nav_user.theme_skin if nav_user and nav_user.theme_skin else 'slate' }}">
-    {% if request.endpoint not in ['index', 'login', 'forgot_password', 'reset_password'] %}
-    <header class="topbar">
-      <a class="brand" href="{{ url_for('index') }}">
-        <span class="brand-logo" aria-hidden="true">SB</span>
-        <span>South Bay ED VL Schedule</span>
-      </a>
-      <div class="top-actions">
-        <button id="settingsButton" class="icon-button" type="button" aria-label="Settings">Settings</button>
-        {% if nav_user %}
-          <a class="user-chip" href="{{ url_for('history') }}">
-            <span class="avatar">{{ nav_user.full_name[0] }}</span>
-            <span>{{ nav_user.username }}</span>
-          </a>
-          <form method="post" action="{{ url_for('logout') }}">
-            <button class="text-button" type="submit">Log out</button>
-          </form>
-        {% else %}
-          <a class="user-chip" href="{{ url_for('login') }}">
-            <span class="avatar">?</span>
-            <span>Log in</span>
-          </a>
-        {% endif %}
-      </div>
-    </header>
-    {% endif %}
-
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         <div class="flash-wrap">

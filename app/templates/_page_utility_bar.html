@@ -1,0 +1,23 @@
+<div class="calendar-utility-bar page-utility-bar">
+  <div class="calendar-branding">
+    <h1><a href="{{ url_for('index') }}">South Bay ED VL Schedule</a></h1>
+  </div>
+  <div class="hero-actions">
+    {% if nav_user %}
+      <button id="openRequestModal" class="primary-button" type="button">Schedule</button>
+      <button id="settingsButton" class="secondary-button" type="button">Settings</button>
+      <a class="user-chip" href="{{ url_for('history') }}">
+        <span class="avatar">{{ nav_user.full_name[0] }}</span>
+        <span>{{ nav_user.username }}</span>
+      </a>
+      <form method="post" action="{{ url_for('logout') }}">
+        <button class="text-button" type="submit">Log out</button>
+      </form>
+    {% else %}
+      <a class="user-chip" href="{{ url_for('login') }}">
+        <span class="avatar">?</span>
+        <span>Log in</span>
+      </a>
+    {% endif %}
+  </div>
+</div>

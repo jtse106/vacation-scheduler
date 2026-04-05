@@ -25,6 +25,8 @@ from .db import (
     can_manage_physician,
     can_manage_request,
     daterange,
+    deleted_email_placeholder,
+    deleted_username_placeholder,
     execute_db,
     get_db,
     hash_password,
@@ -1175,6 +1177,9 @@ def register_routes(app):
         ]
         if parsed is not None:
             changes.append({"field_name": "parsed_payload", "old_value": None, "new_value": str(parsed)})
+            changes.append({"field_name": "assistant_parser_mode", "old_value": None, "new_value": parsed.get("parserMode")})
+            changes.append({"field_name": "assistant_prompt_block", "old_value": None, "new_value": parsed.get("assistantPromptBlock")})
+            changes.append({"field_name": "assistant_raw_response", "old_value": None, "new_value": parsed.get("assistantRawResponse")})
         if error is not None:
             changes.append({"field_name": "error", "old_value": None, "new_value": str(error)})
         if extra_changes:
@@ -1267,6 +1272,9 @@ def register_routes(app):
                         {"field_name": "physician_id", "old_value": None, "new_value": parsed["physicianId"]},
                         {"field_name": "start_date", "old_value": None, "new_value": parsed["startDate"]},
                         {"field_name": "end_date", "old_value": None, "new_value": parsed["endDate"]},
+                        {"field_name": "assistant_parser_mode", "old_value": None, "new_value": parsed.get("parserMode")},
+                        {"field_name": "assistant_prompt_block", "old_value": None, "new_value": parsed.get("assistantPromptBlock")},
+                        {"field_name": "assistant_raw_response", "old_value": None, "new_value": parsed.get("assistantRawResponse")},
                         {"field_name": "error", "old_value": None, "new_value": str(exc)},
                     ],
                 )
@@ -1307,6 +1315,11 @@ def register_routes(app):
                 changes=[
                     {"field_name": "source_type", "old_value": None, "new_value": "assistant"},
                     {"field_name": "source_prompt", "old_value": None, "new_value": prompt_text},
+                    {"field_name": "source_response", "old_value": None, "new_value": parsed["explanation"]},
+                    {"field_name": "assistant_parser_mode", "old_value": None, "new_value": parsed.get("parserMode")},
+                    {"field_name": "assistant_prompt_block", "old_value": None, "new_value": parsed.get("assistantPromptBlock")},
+                    {"field_name": "assistant_raw_response", "old_value": None, "new_value": parsed.get("assistantRawResponse")},
+                    {"field_name": "parsed_payload", "old_value": None, "new_value": str(parsed)},
                     {"field_name": "start_date", "old_value": None, "new_value": parsed["startDate"]},
                     {"field_name": "end_date", "old_value": None, "new_value": parsed["endDate"]},
                     {"field_name": "status", "old_value": None, "new_value": resolution["status"]},
@@ -1346,6 +1359,10 @@ def register_routes(app):
                         {"field_name": "source_prompt", "old_value": request_row["source_prompt"] or "", "new_value": prompt_text},
                         {"field_name": "start_date", "old_value": request_row["start_date"], "new_value": parsed["startDate"]},
                         {"field_name": "end_date", "old_value": request_row["end_date"], "new_value": parsed["endDate"]},
+                        {"field_name": "assistant_parser_mode", "old_value": None, "new_value": parsed.get("parserMode")},
+                        {"field_name": "assistant_prompt_block", "old_value": None, "new_value": parsed.get("assistantPromptBlock")},
+                        {"field_name": "assistant_raw_response", "old_value": None, "new_value": parsed.get("assistantRawResponse")},
+                        {"field_name": "parsed_payload", "old_value": None, "new_value": str(parsed)},
                         {"field_name": "error", "old_value": None, "new_value": str(exc)},
                     ],
                 )
@@ -1389,6 +1406,11 @@ def register_routes(app):
                     {"field_name": "end_date", "old_value": request_row["end_date"], "new_value": parsed["endDate"]},
                     {"field_name": "status", "old_value": request_row["status"], "new_value": resolution["status"]},
                     {"field_name": "source_prompt", "old_value": request_row["source_prompt"] or "", "new_value": prompt_text},
+                    {"field_name": "source_response", "old_value": request_row["source_response"] or "", "new_value": parsed["explanation"]},
+                    {"field_name": "assistant_parser_mode", "old_value": None, "new_value": parsed.get("parserMode")},
+                    {"field_name": "assistant_prompt_block", "old_value": None, "new_value": parsed.get("assistantPromptBlock")},
+                    {"field_name": "assistant_raw_response", "old_value": None, "new_value": parsed.get("assistantRawResponse")},
+                    {"field_name": "parsed_payload", "old_value": None, "new_value": str(parsed)},
                 ],
             )
             row = _request_row(request_row["id"])
@@ -1416,7 +1438,14 @@ def register_routes(app):
                     f"Assistant canceled vacation entry #{request_row['id']}.",
                     "vacation_request",
                     request_row["id"],
-                    changes=[{"field_name": "status", "old_value": request_row["status"], "new_value": "canceled"}],
+                    changes=[
+                        {"field_name": "status", "old_value": request_row["status"], "new_value": "canceled"},
+                        {"field_name": "source_prompt", "old_value": request_row["source_prompt"] or "", "new_value": prompt_text},
+                        {"field_name": "assistant_parser_mode", "old_value": None, "new_value": parsed.get("parserMode")},
+                        {"field_name": "assistant_prompt_block", "old_value": None, "new_value": parsed.get("assistantPromptBlock")},
+                        {"field_name": "assistant_raw_response", "old_value": None, "new_value": parsed.get("assistantRawResponse")},
+                        {"field_name": "parsed_payload", "old_value": None, "new_value": str(parsed)},
+                    ],
                 )
                 _promote_waitlisted_requests()
             return jsonify({"ok": True, "parsed": parsed, "message": "Vacation removed."})
@@ -1433,6 +1462,10 @@ def register_routes(app):
                     {"field_name": "source_prompt", "old_value": request_row["source_prompt"] or "", "new_value": prompt_text},
                     {"field_name": "remove_start_date", "old_value": None, "new_value": parsed["removeStartDate"]},
                     {"field_name": "remove_end_date", "old_value": None, "new_value": parsed["removeEndDate"]},
+                    {"field_name": "assistant_parser_mode", "old_value": None, "new_value": parsed.get("parserMode")},
+                    {"field_name": "assistant_prompt_block", "old_value": None, "new_value": parsed.get("assistantPromptBlock")},
+                    {"field_name": "assistant_raw_response", "old_value": None, "new_value": parsed.get("assistantRawResponse")},
+                    {"field_name": "parsed_payload", "old_value": None, "new_value": str(parsed)},
                 ],
             )
             return jsonify({"ok": True, "parsed": parsed, "message": result["message"]})
@@ -2250,7 +2283,12 @@ def register_routes(app):
         if not user:
             abort(404)
         deleted_at = iso_now()
-        execute_db("UPDATE users SET deleted_at = ?, is_active = 0 WHERE id = ?", (deleted_at, user_id))
+        archived_username = deleted_username_placeholder(user_id)
+        archived_email = deleted_email_placeholder(user_id)
+        execute_db(
+            "UPDATE users SET username = ?, email = ?, deleted_at = ?, is_active = 0 WHERE id = ?",
+            (archived_username, archived_email, deleted_at, user_id),
+        )
         record_activity(
             admin_user["id"],
             "user-deleted",
@@ -2258,6 +2296,8 @@ def register_routes(app):
             "user",
             user_id,
             changes=[
+                {"field_name": "username", "old_value": user["username"], "new_value": archived_username},
+                {"field_name": "email", "old_value": user["email"], "new_value": archived_email},
                 {"field_name": "deleted_at", "old_value": None, "new_value": deleted_at},
                 {"field_name": "is_active", "old_value": user["is_active"], "new_value": 0},
             ],

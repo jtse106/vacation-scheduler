@@ -5,7 +5,7 @@ from email.message import EmailMessage
 from flask import current_app
 import requests
 
-from .db import execute_db
+from .db import execute_db, record_activity
 
 
 def _gmail_api_result(message: EmailMessage):
@@ -55,6 +55,7 @@ def send_email(*, to_email: str, subject: str, body: str, purpose: str, user_id=
 
     status = "logged-only"
     error_text = ""
+    provider = "log-only"
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = from_address
@@ -65,6 +66,7 @@ def send_email(*, to_email: str, subject: str, body: str, purpose: str, user_id=
     if gmail_result is not None:
         status = gmail_result["status"]
         error_text = gmail_result["error"]
+        provider = "gmail-api"
     elif smtp_host and smtp_username and smtp_password:
         try:
             if smtp_port == 465:
@@ -77,9 +79,11 @@ def send_email(*, to_email: str, subject: str, body: str, purpose: str, user_id=
                     server.login(smtp_username, smtp_password)
                     server.send_message(message)
             status = "sent"
+            provider = "smtp"
         except Exception as exc:  # pragma: no cover - network-specific behavior
             status = "error"
             error_text = str(exc)
+            provider = "smtp"
 
     execute_db(
         """
@@ -87,5 +91,28 @@ def send_email(*, to_email: str, subject: str, body: str, purpose: str, user_id=
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (user_id, request_id, purpose, to_email, subject, body, status, error_text),
+    )
+    record_activity(
+        None,
+        f"email-{status}",
+        f"Email {status} for {purpose} to {to_email}.",
+        "vacation_request" if request_id else "user",
+        request_id or user_id,
+        changes=[
+            {"field_name": "purpose", "old_value": None, "new_value": purpose},
+            {"field_name": "recipient", "old_value": None, "new_value": to_email},
+            {"field_name": "subject", "old_value": None, "new_value": subject},
+            {"field_name": "delivery_status", "old_value": None, "new_value": status},
+            {"field_name": "delivery_provider", "old_value": None, "new_value": provider},
+            {"field_name": "from_address", "old_value": None, "new_value": from_address},
+            {"field_name": "body", "old_value": None, "new_value": body},
+            {"field_name": "error_text", "old_value": None, "new_value": error_text},
+            {"field_name": "gmail_client_id_present", "old_value": None, "new_value": bool((current_app.config.get('GMAIL_CLIENT_ID') or '').strip())},
+            {"field_name": "gmail_client_secret_present", "old_value": None, "new_value": bool((current_app.config.get('GMAIL_CLIENT_SECRET') or '').strip())},
+            {"field_name": "gmail_refresh_token_present", "old_value": None, "new_value": bool((current_app.config.get('GMAIL_REFRESH_TOKEN') or '').strip())},
+            {"field_name": "smtp_host_present", "old_value": None, "new_value": bool(smtp_host)},
+            {"field_name": "smtp_username_present", "old_value": None, "new_value": bool(smtp_username)},
+            {"field_name": "smtp_password_present", "old_value": None, "new_value": bool(smtp_password)},
+        ],
     )
     return {"status": status, "error": error_text}

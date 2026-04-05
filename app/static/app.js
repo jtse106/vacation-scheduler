@@ -1240,6 +1240,7 @@ function startBreakoutGame() {
   const totalWidth = columns * brickWidth + (columns - 1) * gap;
   const startX = (canvas.width - totalWidth) / 2;
   const palette = ["#f4d35e", "#f08a5d", "#b83b5e", "#6a4c93", "#2a9d8f", "#3a86ff"];
+  const goldenBrickIndex = Math.floor(random() * brickCount);
   for (let index = 0; index < brickCount; index += 1) {
     const column = index % columns;
     const row = Math.floor(index / columns);
@@ -1250,19 +1251,21 @@ function startBreakoutGame() {
       height: brickHeight,
       alive: true,
       rotation: random() * 0.18 - 0.09,
-      color: palette[index % palette.length],
-      label: physicianNames[index % Math.max(1, physicianNames.length)] || `Doc ${index + 1}`,
+      color: index === goldenBrickIndex ? "#ffd166" : palette[index % palette.length],
+      label: index === goldenBrickIndex ? "GOLD" : physicianNames[index % Math.max(1, physicianNames.length)] || `Doc ${index + 1}`,
+      isGolden: index === goldenBrickIndex,
     });
+  }
+
+  function createBall(x = canvas.width / 2, y = canvas.height - 70, dx = (random() > 0.5 ? 1 : -1) * 3.6, dy = -4.4) {
+    return { x, y, dx, dy, radius: 9 };
   }
 
   const game = {
     paddleX: canvas.width / 2 - 60,
     paddleWidth: 120,
     paddleHeight: 14,
-    ballX: canvas.width / 2,
-    ballY: canvas.height - 70,
-    ballDx: 3.6,
-    ballDy: -4.4,
+    balls: [createBall()],
     leftPressed: false,
     rightPressed: false,
     frameId: null,
@@ -1272,12 +1275,31 @@ function startBreakoutGame() {
     message: "Konami code unlocked. Break the physician schedule blocks.",
     ballExplosion: null,
     bricks,
+    goldenActivated: false,
     startedAt: performance.now(),
     elapsedMs: 0,
     paddleHits: 0,
     score: 0,
     scoreSubmitted: false,
   };
+  Object.defineProperties(game, {
+    ballX: {
+      get() { return game.balls[0]?.x ?? 0; },
+      set(value) { if (game.balls[0]) game.balls[0].x = value; },
+    },
+    ballY: {
+      get() { return game.balls[0]?.y ?? 0; },
+      set(value) { if (game.balls[0]) game.balls[0].y = value; },
+    },
+    ballDx: {
+      get() { return game.balls[0]?.dx ?? 0; },
+      set(value) { if (game.balls[0]) game.balls[0].dx = value; },
+    },
+    ballDy: {
+      get() { return game.balls[0]?.dy ?? 0; },
+      set(value) { if (game.balls[0]) game.balls[0].dy = value; },
+    },
+  });
   state.game = game;
 
   function updateLiveScore() {
@@ -1295,16 +1317,13 @@ function startBreakoutGame() {
   renderGameStatus(`Lives: ${game.lives} | Score: ${formatBreakoutScore(game.score)} | ${game.message}`);
 
   function resetBall() {
-    game.ballX = canvas.width / 2;
-    game.ballY = canvas.height - 70;
-    game.ballDx = (random() > 0.5 ? 1 : -1) * 3.6;
-    game.ballDy = -4.4;
+    game.balls = [createBall()];
   }
 
-  function explodeBall() {
+  function explodeBall(ball) {
     game.ballExplosion = {
-      x: game.ballX,
-      y: game.ballY,
+      x: ball?.x ?? canvas.width / 2,
+      y: ball?.y ?? canvas.height / 2,
       radius: 10,
       alpha: 1,
     };
@@ -1317,14 +1336,46 @@ function startBreakoutGame() {
   }
 
   function bounceOffPaddle() {
+    const ball = game.balls[0];
+    if (!ball) return;
     const paddleCenter = game.paddleX + game.paddleWidth / 2;
-    const normalizedHit = Math.max(-1, Math.min(1, (game.ballX - paddleCenter) / (game.paddleWidth / 2)));
-    const speed = Math.max(5.6, Math.hypot(game.ballDx, game.ballDy));
+    const normalizedHit = Math.max(-1, Math.min(1, (ball.x - paddleCenter) / (game.paddleWidth / 2)));
+    const speed = Math.max(5.6, Math.hypot(ball.dx, ball.dy));
     const bounceAngle = normalizedHit * (Math.PI * 0.38);
-    game.ballDx = speed * Math.sin(bounceAngle);
-    game.ballDy = -Math.max(2.8, speed * Math.cos(bounceAngle));
-    game.ballY = canvas.height - 39;
+    ball.dx = speed * Math.sin(bounceAngle);
+    ball.dy = -Math.max(2.8, speed * Math.cos(bounceAngle));
+    ball.y = canvas.height - 39;
     game.paddleHits += 1;
+  }
+
+  function bounceBallOffPaddle(ball) {
+    const paddleCenter = game.paddleX + game.paddleWidth / 2;
+    const normalizedHit = Math.max(-1, Math.min(1, (ball.x - paddleCenter) / (game.paddleWidth / 2)));
+    const speed = Math.max(5.6, Math.hypot(ball.dx, ball.dy));
+    const bounceAngle = normalizedHit * (Math.PI * 0.38);
+    ball.dx = speed * Math.sin(bounceAngle);
+    ball.dy = -Math.max(2.8, speed * Math.cos(bounceAngle));
+    ball.y = canvas.height - 39;
+    game.paddleHits += 1;
+  }
+
+  function activateGoldenBrick(sourceBall) {
+    if (game.goldenActivated) return;
+    game.goldenActivated = true;
+    const maxActiveBalls = Math.max(1, Math.min(3, game.lives));
+    const anchor = sourceBall || game.balls[0] || createBall();
+    while (game.balls.length < maxActiveBalls) {
+      const spread = game.balls.length === 1 ? -2.4 : 2.4;
+      game.balls.push(
+        createBall(
+          anchor.x,
+          anchor.y,
+          Math.max(-5.8, Math.min(5.8, anchor.dx + spread)),
+          -Math.max(3.2, Math.abs(anchor.dy)),
+        ),
+      );
+    }
+    updateStatus("Golden bar hit. Multiball activated.");
   }
 
   async function finalizeGame(message) {
@@ -1371,9 +1422,10 @@ function startBreakoutGame() {
       if (game.ballExplosion.alpha <= 0) {
         game.ballExplosion = null;
       }
-    } else {
+    }
+    for (const ball of game.balls) {
       context.beginPath();
-      context.arc(game.ballX, game.ballY, 9, 0, Math.PI * 2);
+      context.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
       context.fillStyle = "#ffffff";
       context.fill();
     }
@@ -1389,49 +1441,62 @@ function startBreakoutGame() {
       if (game.leftPressed) game.paddleX -= 7;
       if (game.rightPressed) game.paddleX += 7;
       game.paddleX = Math.max(0, Math.min(canvas.width - game.paddleWidth, game.paddleX));
-      game.ballX += game.ballDx;
-      game.ballY += game.ballDy;
-      if (game.ballX < 9 || game.ballX > canvas.width - 9) {
-        game.ballDx *= -1;
-        game.ballX = Math.max(9, Math.min(canvas.width - 9, game.ballX));
-      }
-      if (game.ballY < 9) {
-        game.ballDy *= -1;
-        game.ballY = 9;
-      }
       const paddleTop = canvas.height - 30;
-      const ballTouchesPaddle = (
-        game.ballDy > 0
-        && game.ballY + 9 >= paddleTop
-        && game.ballY - 9 <= paddleTop + game.paddleHeight
-        && game.ballX >= game.paddleX
-        && game.ballX <= game.paddleX + game.paddleWidth
-      );
-      if (ballTouchesPaddle) {
-        bounceOffPaddle();
-      }
-      if (game.ballY > canvas.height) {
-        game.lives -= 1;
-        explodeBall();
-        if (game.lives <= 0) {
-          game.lost = true;
-          finalizeGame("You lost. You need to go see more patients.");
-        } else {
-          resetBall();
-          updateStatus(`Missed it. ${game.lives} ${game.lives === 1 ? "life" : "lives"} left.`);
+      for (const ball of [...game.balls]) {
+        ball.x += ball.dx;
+        ball.y += ball.dy;
+        if (ball.x < ball.radius || ball.x > canvas.width - ball.radius) {
+          ball.dx *= -1;
+          ball.x = Math.max(ball.radius, Math.min(canvas.width - ball.radius, ball.x));
+        }
+        if (ball.y < ball.radius) {
+          ball.dy *= -1;
+          ball.y = ball.radius;
+        }
+        const ballTouchesPaddle = (
+          ball.dy > 0
+          && ball.y + ball.radius >= paddleTop
+          && ball.y - ball.radius <= paddleTop + game.paddleHeight
+          && ball.x >= game.paddleX
+          && ball.x <= game.paddleX + game.paddleWidth
+        );
+        if (ballTouchesPaddle) {
+          bounceBallOffPaddle(ball);
+        }
+        if (ball.y - ball.radius > canvas.height) {
+          game.balls = game.balls.filter((candidate) => candidate !== ball);
+          game.lives -= 1;
+          explodeBall(ball);
+          if (game.lives <= 0 && game.balls.length === 0) {
+            game.lost = true;
+            finalizeGame("You lost. You need to go see more patients.");
+            break;
+          }
+          if (game.balls.length === 0) {
+            resetBall();
+            updateStatus(`Missed it. ${game.lives} ${game.lives === 1 ? "life" : "lives"} left.`);
+          } else {
+            updateStatus(`${game.balls.length} ball${game.balls.length === 1 ? "" : "s"} still in play.`);
+          }
         }
       }
     }
     for (const brick of bricks) {
       if (!brick.alive || game.won || game.lost) continue;
-      if (game.ballX > brick.x && game.ballX < brick.x + brick.width && game.ballY > brick.y && game.ballY < brick.y + brick.height) {
-        brick.alive = false;
-        game.ballDy *= -1;
+      for (const ball of game.balls) {
+        if (ball.x > brick.x && ball.x < brick.x + brick.width && ball.y > brick.y && ball.y < brick.y + brick.height) {
+          brick.alive = false;
+          ball.dy *= -1;
+          if (brick.isGolden) {
+            activateGoldenBrick(ball);
+          }
+          break;
+        }
       }
     }
     if (bricks.every((brick) => !brick.alive) && !game.won) {
       game.won = true;
-      explodeBall();
+      explodeBall(game.balls[0]);
       burstConfetti();
       finalizeGame("Congratulations! You beat the Emergency Department. You can now take early retirement :)");
     }
@@ -1488,7 +1553,7 @@ function attachGlobalEvents() {
     state.selection.suppressClick = true;
     window.setTimeout(() => {
       state.selection.suppressClick = false;
-    }, 0);
+    }, 140);
   });
 
   qsa("[data-close-modal]").forEach((button) => {
@@ -1614,12 +1679,12 @@ function attachGlobalEvents() {
   });
 
   document.body.addEventListener("click", async (event) => {
+    if (selectionEnabled() && state.selection.suppressClick) {
+      state.selection.suppressClick = false;
+      return;
+    }
     const dayButton = event.target.closest("[data-day]");
     if (dayButton) {
-      if (selectionEnabled() && state.selection.suppressClick) {
-        state.selection.suppressClick = false;
-        return;
-      }
       if (selectionEnabled()) {
         setSingleDaySelection(dayButton.dataset.day);
         return;

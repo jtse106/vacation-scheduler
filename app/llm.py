@@ -459,12 +459,20 @@ def parse_natural_language_request(prompt: str, manageable_physicians: list[dict
     if remote:
         try:
             parsed = _extract_json(remote)
-            return _normalize_remote_parse(parsed, cleaned_prompt, manageable_physicians, default_physician, existing_requests)
+            return _normalize_remote_parse(parsed, cleaned_prompt, manageable_physicians, default_physician, existing_requests) | {
+                "parserMode": "remote",
+                "assistantPromptBlock": prompt_block,
+                "assistantRawResponse": remote,
+            }
         except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             current_app.logger.warning("Assistant response was invalid; falling back to local parser.")
 
     try:
-        return _fallback_parse(cleaned_prompt, manageable_physicians, default_physician, existing_requests)
+        return _fallback_parse(cleaned_prompt, manageable_physicians, default_physician, existing_requests) | {
+            "parserMode": "local",
+            "assistantPromptBlock": prompt_block,
+            "assistantRawResponse": remote or "",
+        }
     except ValueError as exc:
         if remote_enabled:
             raise ValueError(
@@ -476,6 +484,8 @@ def parse_natural_language_request(prompt: str, manageable_physicians: list[dict
 
 def explain_conflict_naturally(prompt: str, conflict_message: str) -> str:
     cleaned_prompt = (prompt or "").strip()
+    if "1 year in advance" in (conflict_message or "").lower():
+        return conflict_message
     response = _zen_text(
         "Explain this scheduling conflict in 1-3 concise sentences with no extra formatting.\n\n"
         f"Original request:\n{cleaned_prompt or 'No original prompt available.'}\n\n"

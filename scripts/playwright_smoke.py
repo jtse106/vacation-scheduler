@@ -190,6 +190,9 @@ def main():
         os.environ["SECRET_KEY"] = "playwright-secret"
         os.environ.setdefault("ZEN_API_KEY", "")
         os.environ["SMTP_HOST"] = ""
+        os.environ["GMAIL_CLIENT_ID"] = ""
+        os.environ["GMAIL_CLIENT_SECRET"] = ""
+        os.environ["GMAIL_REFRESH_TOKEN"] = ""
 
         from app import create_app
 
@@ -270,6 +273,7 @@ def main():
                 page.goto(f"{BASE_URL}/login")
                 expect(page.locator(".topbar")).to_have_count(0)
                 expect(page.locator(".brand")).to_have_count(0)
+                expect(page.get_by_text("Open the standalone reset page")).to_have_count(0)
                 expect(page.locator('.auth-card input[name="password"]')).to_have_attribute("type", "password")
                 expect(page.locator(".password-toggle svg").first).to_be_visible()
                 toggle_styles = page.evaluate(
@@ -296,6 +300,8 @@ def main():
                 expect(page.locator(".topbar")).to_have_count(0)
                 expect(page.locator("#openRequestModal")).to_have_count(0)
                 expect(page.locator(".calendar-utility-bar")).to_contain_text("South Bay ED VL Schedule")
+                expect(page.locator(".calendar-utility-bar")).not_to_contain_text("Live Schedule")
+                expect(page.locator(".sidebar-links").get_by_role("link", name="South Bay ED VL Schedule")).to_be_visible()
                 mini_prev_box = page.locator("#miniPrev").bounding_box()
                 mini_prev_year_box = page.locator("#miniPrevYear").bounding_box()
                 mini_next_box = page.locator("#miniNext").bounding_box()
@@ -355,19 +361,24 @@ def main():
                     ("/admin", "Admin console"),
                 ]:
                     page.goto(f"{BASE_URL}{path}")
-                    expect(page.locator(".topbar")).to_be_visible()
+                    expect(page.locator(".topbar")).to_have_count(0)
+                    expect(page.locator(".page-utility-bar")).to_be_visible()
                     expect(page.locator(".subpage-hero-panel")).to_be_visible()
-                    expect(page.locator("h1")).to_contain_text(heading)
+                    expect(page.locator(".subpage-hero-panel h1")).to_contain_text(heading)
                     header_styles = page.evaluate(
                         """
                         () => ({
-                          topbar: getComputedStyle(document.querySelector('.topbar')).backgroundImage,
+                          utilityBar: getComputedStyle(document.querySelector('.page-utility-bar')).backgroundImage,
                           hero: getComputedStyle(document.querySelector('.subpage-hero-panel')).backgroundImage,
+                          sidebarTop: document.querySelector('.sidebar')?.getBoundingClientRect().top ?? null,
+                          utilityTop: document.querySelector('.page-utility-bar')?.getBoundingClientRect().top ?? null,
                         })
                         """
                     )
-                    assert "gradient" in header_styles["topbar"].lower(), header_styles
+                    assert "gradient" in header_styles["utilityBar"].lower(), header_styles
                     assert "gradient" in header_styles["hero"].lower(), header_styles
+                    assert header_styles["sidebarTop"] is not None and header_styles["utilityTop"] is not None
+                    assert abs(header_styles["sidebarTop"] - header_styles["utilityTop"]) <= 8, header_styles
                 page.goto(f"{BASE_URL}/admin")
                 page.get_by_role("button", name="Users", exact=True).click()
                 expect(page.locator(".admin-user-group-title", has_text="Admin accounts")).to_be_visible()
@@ -448,6 +459,14 @@ def main():
                 delete_row.get_by_role("button", name="Delete").click()
                 wait_for_toast(page, "User deleted.")
                 expect(page.locator(".admin-user-row", has_text="Delete Doctor")).to_have_count(0)
+                page.fill('#userCreateForm input[name="full_name"]', "Delete Doctor Recreated")
+                page.fill('#userCreateForm input[name="username"]', "delete_doc")
+                page.fill('#userCreateForm input[name="email"]', "delete_doc@example.com")
+                page.locator("#userProvisioningManualToggle").check()
+                page.get_by_role("button", name="Generate random password").click()
+                page.get_by_role("button", name="Create user").click()
+                wait_for_toast(page, "manually set password")
+                expect(page.locator(".admin-user-row", has_text="Delete Doctor Recreated")).to_be_visible()
 
                 pdoctor_row = page.locator(".admin-user-row", has_text="Playwright Doctor")
                 pdoctor_row.get_by_role("button", name="Edit / reset password").click()
@@ -649,9 +668,27 @@ def main():
                     """
                 )
                 assert toolbar_position["toolbarBottom"] <= toolbar_position["mountTop"], toolbar_position
+                pre_drag_state = page.evaluate(
+                    """
+                    () => ({
+                      toolbarHeight: document.querySelector('#selectionToolbar')?.getBoundingClientRect().height ?? 0,
+                      mountTop: document.querySelector('#calendarMount')?.getBoundingClientRect().top ?? 0,
+                    })
+                    """
+                )
                 drag_select_dates(page, "2026-10-20", "2026-10-22")
                 expect(page.locator("#selectionToolbar")).to_be_visible()
                 expect(page.locator("#selectionLabel")).to_contain_text("2026-10-20 to 2026-10-22")
+                post_drag_state = page.evaluate(
+                    """
+                    () => ({
+                      toolbarHeight: document.querySelector('#selectionToolbar')?.getBoundingClientRect().height ?? 0,
+                      mountTop: document.querySelector('#calendarMount')?.getBoundingClientRect().top ?? 0,
+                    })
+                    """
+                )
+                assert abs(post_drag_state["mountTop"] - pre_drag_state["mountTop"]) <= 1, {"before": pre_drag_state, "after": post_drag_state}
+                assert post_drag_state["toolbarHeight"] <= 34, post_drag_state
                 page.locator("#calendarTitle").click()
                 expect(page.locator("#selectionToolbar")).to_be_hidden()
                 page.locator('[data-day="2026-10-20"]').click()
@@ -686,6 +723,11 @@ def main():
                 expect(page.locator("#historyList")).to_contain_text("2026-10-05 to 2026-10-07")
 
                 submit_assistant_request_with_error(page, "Playwright Doctor", "Please sort that doctor out sometime later", "usable date")
+                page.locator('#requestModal [data-close-modal="requestModal"]').click()
+
+                create_manual_request(page, "Playwright Doctor", "2027-05-01", "2027-05-02", "Too far ahead", expect_error="1 year in advance")
+                page.locator('#requestModal [data-close-modal="requestModal"]').click()
+                submit_assistant_request_with_error(page, "Playwright Doctor", "Schedule Playwright Doctor off 2027-05-01 to 2027-05-02", "1 year in advance")
                 page.locator('#requestModal [data-close-modal="requestModal"]').click()
 
                 submit_assistant_request(page, "Playwright Doctor", "Move Playwright Doctor vacation from 2026-10-05 to 2026-10-07 to 2026-10-08 to 2026-10-10", expect_toast="Vacation updated.")
@@ -754,7 +796,7 @@ def main():
 
                 login(page, "admin", "Admin123!")
                 page.goto(f"{BASE_URL}/admin")
-                page.get_by_role("button", name="Schedule", exact=True).click()
+                page.locator('[data-admin-panel-button="schedule"]').click()
                 page.get_by_role("button", name="Cancel all pending").click()
                 wait_for_toast(page, "Canceled 1 pending trade")
                 expect(page.locator("#adminTrades")).to_contain_text("Admin bulk cancel")
@@ -767,7 +809,7 @@ def main():
                 create_manual_request(page, waitlist_physicians[6]["full_name"], waitlist_day, waitlist_day, "Waitlist first physician", expect_toast="waitlisted")
                 create_manual_request(page, waitlist_physicians[7]["full_name"], waitlist_day, waitlist_day, "Waitlist second physician", expect_toast="waitlisted")
                 page.goto(f"{BASE_URL}/admin")
-                page.get_by_role("button", name="Schedule", exact=True).click()
+                page.locator('[data-admin-panel-button="schedule"]').click()
                 expect(page.locator("#adminWaitlist")).to_contain_text(waitlist_physicians[6]["full_name"])
                 expect(page.locator("#adminWaitlist")).to_contain_text(waitlist_physicians[7]["full_name"])
                 expect(page.locator(".history-item.waitlist-card", has_text=waitlist_physicians[6]["full_name"])).to_contain_text("waitlisted")
@@ -813,7 +855,7 @@ def main():
                 page.locator('[data-close-modal="dayModal"]').click()
 
                 page.goto(f"{BASE_URL}/admin")
-                page.get_by_role("button", name="Schedule", exact=True).click()
+                page.locator('[data-admin-panel-button="schedule"]').click()
                 expect(page.locator(".history-item", has_text=waitlist_physicians[6]["full_name"])).to_contain_text("scheduled")
                 expect(page.locator(".history-item.waitlist-card", has_text=waitlist_physicians[7]["full_name"])).to_contain_text("waitlisted")
 
@@ -824,7 +866,7 @@ def main():
                 page.locator('[data-close-modal="dayModal"]').click()
 
                 page.goto(f"{BASE_URL}/admin")
-                page.get_by_role("button", name="Schedule", exact=True).click()
+                page.locator('[data-admin-panel-button="schedule"]').click()
                 expect(page.locator(".history-item", has_text=waitlist_physicians[7]["full_name"])).to_contain_text("scheduled")
                 promoted_waitlist_email = query_one(
                     db_path,
@@ -845,8 +887,15 @@ def main():
                 expect(page.locator("#logTable")).to_contain_text("Field")
                 expect(page.locator("#logTable")).to_contain_text("Old")
                 expect(page.locator("#logTable")).to_contain_text("New")
-                expect(page.locator("#logTable")).to_contain_text("source_prompt")
-                expect(page.locator("#logTable")).to_contain_text("Please sort that doctor out sometime later")
+                expect(page.locator("#logTable")).to_contain_text("delivery_provider")
+                assert query_one(db_path, "SELECT 1 FROM change_log WHERE field_name = 'source_prompt' LIMIT 1") is not None
+                assert query_one(db_path, "SELECT 1 FROM change_log WHERE field_name = 'assistant_parser_mode' LIMIT 1") is not None
+                assistant_prompt_log = query_one(
+                    db_path,
+                    "SELECT new_value FROM change_log WHERE field_name = 'source_prompt' AND new_value LIKE ? ORDER BY id DESC LIMIT 1",
+                    ("%Please sort that doctor out sometime later%",),
+                )
+                assert assistant_prompt_log is not None
 
                 page.goto(f"{BASE_URL}/legacy-calendars?year=2024")
                 page.wait_for_selector(".legacy-table")
@@ -898,6 +947,19 @@ def main():
                     """
                     () => {
                       const game = window.__VACATION_SCHEDULER_STATE__.game;
+                      const gold = game.bricks.find((brick) => brick.isGolden);
+                      game.ballX = gold.x + gold.width / 2;
+                      game.ballY = gold.y + gold.height / 2;
+                      game.ballDx = 0.4;
+                      game.ballDy = 2.4;
+                    }
+                    """
+                )
+                page.wait_for_function("() => window.__VACATION_SCHEDULER_STATE__.game.balls.length === 3", timeout=10000)
+                page.evaluate(
+                    """
+                    () => {
+                      const game = window.__VACATION_SCHEDULER_STATE__.game;
                       game.paddleX = 280;
                       game.ballX = game.paddleX + game.paddleWidth / 2;
                       game.ballY = 381;
@@ -931,7 +993,18 @@ def main():
                 assert edge_velocity["dx"] < -1.2, edge_velocity
                 assert edge_velocity["dy"] < 0, edge_velocity
                 page.evaluate(
-                    "() => { const game = window.__VACATION_SCHEDULER_STATE__.game; game.lives = 1; game.ballY = 999; }"
+                    """
+                    () => {
+                      const game = window.__VACATION_SCHEDULER_STATE__.game;
+                      const activeBallCount = Math.max(1, game.balls.length);
+                      game.lives = activeBallCount;
+                      game.balls = game.balls.map((ball, index) => ({
+                        ...ball,
+                        y: 999 + index * 12,
+                        dy: Math.abs(ball.dy || 4.4),
+                      }));
+                    }
+                    """
                 )
                 page.wait_for_function(
                     "() => (document.querySelector('#gameStatus')?.textContent || '').includes('You lost. You need to go see more patients.')",
