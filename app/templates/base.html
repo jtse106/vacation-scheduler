@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>South Bay ED VL Schedule</title>
+    <title>South Bay ED Vacation Schedule</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body class="page-{{ request.endpoint or 'unknown' }}" data-theme="{{ nav_user.theme_skin if nav_user and nav_user.theme_skin else 'slate' }}">
@@ -119,6 +119,28 @@
       </div>
     </div>
 
+    <div id="profileModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h2>My Profile</h2>
+            <p class="subtle">Update your name, username, and email address.</p>
+          </div>
+          <button class="icon-button window-close" data-close-modal="profileModal" type="button" aria-label="Close">X</button>
+        </div>
+        <form id="profileForm" class="stack">
+          <label><span>Full name</span><input type="text" name="full_name" required /></label>
+          <label><span>Username</span><input type="text" name="username" required /></label>
+          <label><span>Email</span><input type="email" name="email" required /></label>
+          <label>
+            <span>Account type</span>
+            <input type="text" name="role_label" readonly />
+          </label>
+          <button class="primary-button" type="submit">Save profile</button>
+        </form>
+      </div>
+    </div>
+
     <div id="requestModal" class="modal hidden" aria-hidden="true">
       <div class="modal-card wide-modal">
         <div class="modal-header">
@@ -203,14 +225,35 @@
           <label>
             <span>Role</span>
             <select name="role">
-              <option value="physician">Physician</option>
+              <option value="physician">Full-time Physician</option>
+              <option value="per_diem">Per Diem</option>
               <option value="admin">Admin</option>
             </select>
           </label>
-          <label><span>Reset password</span><input type="password" name="password" data-password-primary placeholder="Leave blank to keep current password" /></label>
-          <label><span>Confirm reset password</span><input type="password" name="confirm_password" data-password-confirm placeholder="Re-enter the new password" /></label>
-          <div class="form-feedback hidden" data-password-feedback></div>
+          <label>
+            <span>Status</span>
+            <select name="is_active">
+              <option value="1">Active</option>
+              <option value="0">Inactive</option>
+            </select>
+          </label>
           <button class="primary-button" type="submit">Save user</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="userPasswordModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2 id="userPasswordModalTitle">Reset Password</h2>
+          <button class="icon-button window-close" data-close-modal="userPasswordModal" type="button" aria-label="Close">X</button>
+        </div>
+        <form id="userPasswordForm" class="stack password-validation-form">
+          <input type="hidden" name="user_id" value="" />
+          <label><span>Reset password</span><input type="password" name="password" data-password-primary required /></label>
+          <label><span>Confirm password reset</span><input type="password" name="confirm_password" data-password-confirm required /></label>
+          <div class="form-feedback hidden" data-password-feedback></div>
+          <button class="primary-button" type="submit">Reset password</button>
         </form>
       </div>
     </div>

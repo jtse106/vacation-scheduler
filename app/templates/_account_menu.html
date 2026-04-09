@@ -1,0 +1,24 @@
+<div class="account-menu">
+  <button class="user-chip account-menu-trigger" type="button" aria-haspopup="true" aria-label="Account menu">
+    <span class="avatar" data-account-avatar>{{ nav_user.full_name[0] if nav_user else '?' }}</span>
+    <span data-account-username>{{ nav_user.username if nav_user else 'Log in' }}</span>
+  </button>
+  {% if nav_user %}
+    <div class="account-menu-dropdown" role="menu" aria-label="Account options">
+      <button class="account-menu-item" type="button" role="menuitem" data-open-profile>
+        My Profile
+      </button>
+      <a class="account-menu-item" href="{{ url_for('history') }}" role="menuitem">
+        My Requests
+      </a>
+      <a class="account-menu-item" href="{{ url_for('authorized_delegates') }}" role="menuitem">
+        Authorized Delegates
+      </a>
+      <form method="post" action="{{ url_for('logout') }}">
+        <button class="account-menu-item" type="submit" role="menuitem">
+          Log out
+        </button>
+      </form>
+    </div>
+  {% endif %}
+</div>

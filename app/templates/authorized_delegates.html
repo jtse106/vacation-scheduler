@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell stack">
+      {% include "_page_utility_bar.html" %}
+      <section class="card page-panel subpage-hero-panel">
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">Delegation</span>
+            <h1>Authorized delegates</h1>
+            <p class="subtle">Grant another physician permission to update your schedule.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card page-panel">
+        <form id="delegationForm" class="stack compact-form form-grid">
+          <label>
+            <span>Delegate physician</span>
+            <select name="delegate_user_id" id="delegationSelect">
+              <option value="">Select a physician</option>
+            </select>
+          </label>
+          <button class="primary-button" type="submit">Add delegate</button>
+        </form>
+        <div class="stack">
+          <div>
+            <h3>Your delegates</h3>
+            <div id="ownedDelegations" class="history-list compact-list"></div>
+          </div>
+          <div>
+            <h3>Schedules you can manage</h3>
+            <div id="incomingDelegations" class="history-list compact-list"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+{% endblock %}

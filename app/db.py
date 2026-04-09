@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS vacation_requests (
     processed_at TEXT,
     processed_by INTEGER,
     decision_note TEXT,
+    is_archived INTEGER NOT NULL DEFAULT 0,
     canceled_at TEXT,
     canceled_by_user_id INTEGER,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -256,6 +257,7 @@ def _ensure_columns(db: sqlite3.Connection):
         "source_response": "TEXT",
         "updated_at": "TEXT",
         "updated_by_user_id": "INTEGER",
+        "is_archived": "INTEGER NOT NULL DEFAULT 0",
         "canceled_by_user_id": "INTEGER",
     }
     for name, definition in additions.items():
@@ -284,6 +286,7 @@ def _normalize_existing_records(db: sqlite3.Connection):
     db.execute("UPDATE vacation_requests SET created_by_user_id = COALESCE(created_by_user_id, user_id)")
     db.execute("UPDATE vacation_requests SET updated_at = COALESCE(updated_at, processed_at, created_at)")
     db.execute("UPDATE vacation_requests SET source_type = COALESCE(source_type, 'manual')")
+    db.execute("UPDATE vacation_requests SET is_archived = COALESCE(is_archived, 0)")
     db.execute(
         """
         UPDATE holiday_documents
@@ -459,7 +462,7 @@ def physician_directory():
         """
         SELECT id, username, full_name, email, annual_day_limit
         FROM users
-        WHERE role = 'physician' AND is_active = 1 AND deleted_at IS NULL
+        WHERE role IN ('physician', 'per_diem') AND is_active = 1 AND deleted_at IS NULL
         ORDER BY full_name COLLATE NOCASE ASC
         """
     )
@@ -475,7 +478,7 @@ def managed_physician_rows(actor_row):
         SELECT DISTINCT u.id, u.username, u.full_name, u.email, u.annual_day_limit
         FROM users u
         LEFT JOIN user_delegations d ON d.owner_user_id = u.id
-        WHERE u.role = 'physician'
+        WHERE u.role IN ('physician', 'per_diem')
           AND u.is_active = 1
           AND u.deleted_at IS NULL
           AND (
@@ -855,7 +858,7 @@ def ensure_seed_data(app):
         if not query_db("SELECT id FROM holiday_rotation_assignments LIMIT 1", one=True):
             user_lookup = {
                 "".join(part.lower() for part in row["full_name"].split()): row["id"]
-                for row in query_db("SELECT id, full_name FROM users WHERE role = 'physician' AND deleted_at IS NULL")
+                for row in query_db("SELECT id, full_name FROM users WHERE role IN ('physician', 'per_diem') AND deleted_at IS NULL")
             }
             seed_rotation_assignments(db, user_lookup)
             db.commit()

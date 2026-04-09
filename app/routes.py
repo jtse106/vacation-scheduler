@@ -60,6 +60,8 @@ from .themes import THEME_CHOICES, theme_options_payload
 
 MAJOR_HOLIDAYS = ["thanksgiving", "christmas", "new_years"]
 MINOR_HOLIDAYS = ["memorial_day", "july_4", "labor_day"]
+PHYSICIAN_ROLES = {"physician", "per_diem"}
+USER_ROLES = PHYSICIAN_ROLES | {"admin"}
 
 
 def current_user():
@@ -151,6 +153,165 @@ def _holiday_badge(day_iso: str, holiday_lookup: dict[str, dict]):
     return {"title": holiday_row["title"], "category": holiday_row["category"]}
 
 
+def _spring_break_badge(day_value: date):
+    spring_break_start, spring_break_end = _spring_break_window(day_value.year)
+    if spring_break_start <= day_value <= spring_break_end:
+        return {"title": "Spring Break"}
+    return None
+
+
+def _spring_break_window(year: int):
+    march_31 = date(year, 3, 31)
+    days_since_sunday = (march_31.weekday() - 6) % 7
+    last_sunday_in_march = march_31 - timedelta(days=days_since_sunday)
+    spring_break_start = last_sunday_in_march - timedelta(days=6)
+
+    april_1 = date(year, 4, 1)
+    days_until_sunday = (6 - april_1.weekday()) % 7
+    first_sunday_in_april = april_1 + timedelta(days=days_until_sunday)
+    second_sunday_in_april = first_sunday_in_april + timedelta(days=7)
+    return spring_break_start, second_sunday_in_april
+
+
+def _merge_iso_ranges(ranges: list[tuple[str, str]]):
+    if not ranges:
+        return []
+    ordered = sorted((date.fromisoformat(start), date.fromisoformat(end)) for start, end in ranges)
+    merged: list[tuple[date, date]] = []
+    current_start, current_end = ordered[0]
+    for start, end in ordered[1:]:
+        if start <= current_end + timedelta(days=1):
+            current_end = max(current_end, end)
+            continue
+        merged.append((current_start, current_end))
+        current_start, current_end = start, end
+    merged.append((current_start, current_end))
+    return [(start.isoformat(), end.isoformat()) for start, end in merged]
+
+
+def _ranges_overlap(start_a: str, end_a: str, start_b: str, end_b: str):
+    return start_a <= end_b and end_a >= start_b
+
+
+def _spring_break_years():
+    legacy_years = [year for year in legacy_calendar_years() if year and year >= 2022]
+    live_years = {
+        int(row["year"])
+        for row in query_db(
+            """
+            SELECT DISTINCT substr(start_date, 1, 4) AS year
+            FROM vacation_requests
+            WHERE end_date >= '2022-03-25'
+            """
+        )
+        if row["year"]
+    }
+    max_year = max([date.today().year, *legacy_years, *live_years], default=date.today().year)
+    return list(range(2022, max_year + 1))
+
+
+def _spring_break_legacy_ranges():
+    known_names = {
+        re.sub(r"[^a-z0-9]+", "", row["full_name"].lower()): row["full_name"]
+        for row in query_db("SELECT full_name FROM users WHERE deleted_at IS NULL")
+        if row["full_name"]
+    }
+    return parse_legacy_schedule_documents(known_names)["ranges_by_name"]
+
+
+def _physician_has_spring_break_for_year(user_id: int, full_name: str, year: int, legacy_ranges: dict[str, list[tuple[str, str]]] | None = None):
+    window_start, window_end = _spring_break_window(year)
+    start_iso = window_start.isoformat()
+    end_iso = window_end.isoformat()
+    live_match = query_db(
+        """
+        SELECT id
+        FROM vacation_requests
+        WHERE user_id = ?
+          AND status != 'canceled'
+          AND start_date <= ?
+          AND end_date >= ?
+        LIMIT 1
+        """,
+        (user_id, end_iso, start_iso),
+        one=True,
+    )
+    if live_match:
+        return True
+
+    for range_start, range_end in (legacy_ranges or {}).get(full_name, []):
+        if _ranges_overlap(range_start, range_end, start_iso, end_iso):
+            return True
+    return False
+
+
+def _spring_break_request_block_message():
+    return (
+        "Error - Physicians who have spring break off this calendar year must wait until after "
+        "November 1 to request dates for spring break of the following year"
+    )
+
+
+def _validate_spring_break_request(user_id: int, full_name: str, start_date: str, end_date: str):
+    today = date.today()
+    if today >= date(today.year, 11, 1):
+        return None
+    next_spring_break_start, next_spring_break_end = _spring_break_window(today.year + 1)
+    if not _ranges_overlap(start_date, end_date, next_spring_break_start.isoformat(), next_spring_break_end.isoformat()):
+        return None
+    legacy_ranges = _spring_break_legacy_ranges()
+    if _physician_has_spring_break_for_year(user_id, full_name, today.year, legacy_ranges):
+        return _spring_break_request_block_message()
+    return None
+
+
+def _spring_break_physicians_for_year(year: int, legacy_ranges: dict[str, list[tuple[str, str]]] | None = None):
+    window_start, window_end = _spring_break_window(year)
+    start_iso = window_start.isoformat()
+    end_iso = window_end.isoformat()
+    by_name: dict[str, set[tuple[str, str]]] = {}
+
+    live_rows = query_db(
+        """
+        SELECT COALESCE(vr.request_display_name, u.full_name) AS full_name, vr.start_date, vr.end_date
+        FROM vacation_requests vr
+        LEFT JOIN users u ON u.id = vr.user_id
+        WHERE vr.status != 'canceled'
+          AND vr.start_date <= ?
+          AND vr.end_date >= ?
+        ORDER BY full_name COLLATE NOCASE ASC, vr.start_date ASC
+        """,
+        (end_iso, start_iso),
+    )
+    for row in live_rows:
+        name = (row["full_name"] or "").strip()
+        if not name:
+            continue
+        overlap = (max(start_iso, row["start_date"]), min(end_iso, row["end_date"]))
+        by_name.setdefault(name, set()).add(overlap)
+
+    for name, ranges in (legacy_ranges or {}).items():
+        cleaned = (name or "").strip()
+        if not cleaned or cleaned.upper() == "HOLIDAY":
+            continue
+        for range_start, range_end in ranges:
+            if range_start > end_iso or range_end < start_iso:
+                continue
+            overlap = (max(start_iso, range_start), min(end_iso, range_end))
+            by_name.setdefault(cleaned, set()).add(overlap)
+
+    items = []
+    for name in sorted(by_name, key=lambda value: value.lower()):
+        ranges = _merge_iso_ranges(list(by_name[name]))
+        items.append(
+            {
+                "fullName": name,
+                "ranges": [f"{range_start} to {range_end}" if range_start != range_end else range_start for range_start, range_end in ranges],
+            }
+        )
+    return items
+
+
 def build_month_payload(year: int, month: int, week_start: str, show_week_numbers: bool):
     cal = calendar.Calendar(firstweekday=6 if week_start == "sunday" else 0)
     weeks = []
@@ -163,6 +324,7 @@ def build_month_payload(year: int, month: int, week_start: str, show_week_number
         for day in week:
             day_iso = day.isoformat()
             holiday = _holiday_badge(day_iso, holiday_lookup)
+            spring_break = _spring_break_badge(day)
             rows = [] if holiday else overlapping_requests(day_iso)
             slots = []
             for index in range(max_slots):
@@ -182,6 +344,8 @@ def build_month_payload(year: int, month: int, week_start: str, show_week_number
                     "isToday": day_iso == today,
                     "isHoliday": bool(holiday),
                     "holiday": holiday,
+                    "isSpringBreak": bool(spring_break),
+                    "springBreak": spring_break,
                     "waitlistCount": waitlist_lookup.get(day_iso, 0),
                     "slots": slots,
                 }
@@ -205,6 +369,7 @@ def serialize_request(row):
         "startDate": row["start_date"],
         "endDate": row["end_date"],
         "status": row["status"],
+        "isArchived": bool(row["is_archived"]),
         "note": row["request_note"] or "",
         "decisionNote": row["decision_note"] or "",
         "sourceType": row["source_type"],
@@ -234,9 +399,53 @@ def serialize_user(row):
         "fullName": row["full_name"],
         "email": row["email"],
         "role": row["role"],
+        "roleLabel": "Admin" if row["role"] == "admin" else "Per Diem" if row["role"] == "per_diem" else "Full-time Physician",
         "isActive": bool(row["is_active"]),
         "annualDayLimit": row["annual_day_limit"],
     }
+
+
+def _metrics_totals_by_user(user_ids: list[int]):
+    if not user_ids:
+        return {}
+    placeholders = ",".join("?" for _ in user_ids)
+    rows = query_db(
+        f"""
+        SELECT user_id, start_date, end_date
+        FROM vacation_requests
+        WHERE status != 'canceled'
+          AND user_id IN ({placeholders})
+        ORDER BY user_id ASC, start_date ASC, id ASC
+        """,
+        tuple(user_ids),
+    )
+    totals: dict[int, dict[int, set[str]]] = {}
+    for row in rows:
+        user_totals = totals.setdefault(row["user_id"], {})
+        for day_iso in daterange(row["start_date"], row["end_date"]):
+            year = int(day_iso[:4])
+            user_totals.setdefault(year, set()).add(day_iso)
+    return {user_id: {year: len(days) for year, days in years.items()} for user_id, years in totals.items()}
+
+
+def _metrics_years_for_totals(totals: dict[int, dict[int, int]]):
+    years = sorted({year for user_years in totals.values() for year in user_years})
+    current_year = date.today().year
+    if current_year not in years:
+        years.append(current_year)
+    return sorted(years)
+
+
+def _selected_metric_physicians(actor, requested_ids: list[int]):
+    manageable = managed_physician_rows(actor)
+    manageable_by_id = {row["id"]: row for row in manageable}
+    if actor["role"] == "admin":
+        selected_ids = [physician_id for physician_id in requested_ids if physician_id in manageable_by_id]
+        if not selected_ids:
+            selected_ids = [row["id"] for row in manageable[:3]]
+    else:
+        selected_ids = [actor["id"]]
+    return manageable, [manageable_by_id[physician_id] for physician_id in selected_ids if physician_id in manageable_by_id]
 
 
 def serialize_delegation(row):
@@ -386,7 +595,7 @@ def _pending_trade_notice(actor):
         return None
     return {
         "count": pending_count,
-        "href": f"{url_for('history')}#tradeSection",
+        "href": url_for("holiday_trades"),
         "message": (
             "1 holiday trade request needs your response."
             if pending_count == 1
@@ -586,7 +795,7 @@ def _export_matrix(year: int):
         """
         SELECT id, full_name
         FROM users
-        WHERE role = 'physician' AND deleted_at IS NULL
+        WHERE role IN ('physician', 'per_diem') AND deleted_at IS NULL
         ORDER BY full_name COLLATE NOCASE ASC
         """
     )
@@ -716,7 +925,7 @@ def _ensure_physician_record(db, full_name: str):
         """
         SELECT id, username, full_name
         FROM users
-        WHERE role = 'physician' AND deleted_at IS NULL AND lower(replace(replace(full_name, ' ', ''), '/', '')) = ?
+        WHERE role IN ('physician', 'per_diem') AND deleted_at IS NULL AND lower(replace(replace(full_name, ' ', ''), '/', '')) = ?
         """,
         (normalized,),
     ).fetchone()
@@ -778,7 +987,7 @@ def _sync_live_schedule_from_legacy(actor):
     db = get_db()
     known_names = {
         "".join(ch.lower() for ch in row["full_name"] if ch.isalnum()): row["full_name"]
-        for row in query_db("SELECT full_name FROM users WHERE role = 'physician' AND deleted_at IS NULL")
+        for row in query_db("SELECT full_name FROM users WHERE role IN ('physician', 'per_diem') AND deleted_at IS NULL")
     }
     parsed = parse_legacy_schedule_documents(known_names)
     snapshot_id = _snapshot_live_schedule(
@@ -1093,12 +1302,82 @@ def register_routes(app):
     @app.post("/logout")
     def logout():
         session.clear()
-        return redirect(url_for("login"))
+        return redirect(url_for("index"))
 
     @app.route("/history")
     @login_required
     def history():
-        return render_template("history.html", rotation_years=_rotation_years(), current_year=date.today().year)
+        return render_template("history.html")
+
+    @app.route("/metrics")
+    @login_required
+    def metrics():
+        actor = current_user()
+        requested_ids = [_parse_int(value) for value in request.args.getlist("physician_id")]
+        requested_ids = [value for value in requested_ids if value]
+        manageable, selected_physicians = _selected_metric_physicians(actor, requested_ids)
+        totals = _metrics_totals_by_user([row["id"] for row in selected_physicians])
+        years = _metrics_years_for_totals(totals)
+        selected_year = _parse_int(request.args.get("year"), date.today().year)
+        if years and selected_year not in years:
+            selected_year = years[-1]
+
+        comparison_rows = []
+        for physician in selected_physicians:
+            year_totals = totals.get(physician["id"], {})
+            comparison_rows.append(
+                {
+                    "id": physician["id"],
+                    "fullName": physician["full_name"],
+                    "selectedYearTotal": year_totals.get(selected_year, 0),
+                    "totalsByYear": [year_totals.get(year, 0) for year in years],
+                }
+            )
+        max_selected_total = max((row["selectedYearTotal"] for row in comparison_rows), default=0)
+        chart_rows = [
+            row
+            | {
+                "barPercent": 0 if max_selected_total == 0 else round((row["selectedYearTotal"] / max_selected_total) * 100, 1),
+                "barTone": "danger" if actor["role"] == "admin" and index % 3 == 2 else "info" if actor["role"] == "admin" and index % 3 == 1 else "success",
+            }
+            for index, row in enumerate(comparison_rows)
+        ]
+        return render_template(
+            "metrics.html",
+            metric_years=years,
+            selected_year=selected_year,
+            metric_physicians=manageable,
+            selected_metric_physician_ids=[row["id"] for row in selected_physicians],
+            metric_chart_rows=chart_rows,
+            metric_comparison_rows=comparison_rows,
+        )
+
+    @app.route("/spring-break")
+    @login_required
+    def spring_break():
+        years = _spring_break_years()
+        selected_year = _parse_int(request.args.get("year"), years[-1] if years else date.today().year)
+        if years and selected_year not in years:
+            selected_year = years[-1]
+        legacy_ranges = _spring_break_legacy_ranges()
+        spring_break_counts = {year: len(_spring_break_physicians_for_year(year, legacy_ranges)) for year in years}
+        return render_template(
+            "spring_break.html",
+            spring_break_years=years,
+            selected_year=selected_year,
+            spring_break_year_counts=spring_break_counts,
+            spring_break_physicians=_spring_break_physicians_for_year(selected_year, legacy_ranges),
+        )
+
+    @app.route("/authorized-delegates")
+    @login_required
+    def authorized_delegates():
+        return render_template("authorized_delegates.html")
+
+    @app.route("/holiday-trades")
+    @login_required
+    def holiday_trades():
+        return render_template("holiday_trades.html", rotation_years=_rotation_years(), current_year=date.today().year)
 
     @app.route("/holiday-rotation")
     def holiday_rotation():
@@ -1344,6 +1623,32 @@ def register_routes(app):
         rows = _requests_for_managed_physicians(actor)
         return jsonify({"requests": [serialize_request(row) for row in rows]})
 
+    @app.post("/api/requests/<int:request_id>/archive")
+    @login_required
+    def api_archive_request(request_id: int):
+        actor = current_user()
+        row = _request_row(request_id)
+        if not row:
+            abort(404)
+        if not can_manage_request(actor, row):
+            return jsonify({"error": "You cannot manage that vacation entry."}), 403
+        if row["is_archived"]:
+            return jsonify({"message": "Vacation already archived.", "request": serialize_request(row)})
+        execute_db(
+            "UPDATE vacation_requests SET is_archived = 1, updated_at = ?, updated_by_user_id = ? WHERE id = ?",
+            (iso_now(), actor["id"], request_id),
+        )
+        record_activity(
+            actor["id"],
+            "vacation-archived",
+            f"{actor['full_name']} archived vacation request #{request_id}.",
+            "vacation_request",
+            request_id,
+            changes=[{"field_name": "is_archived", "old_value": 0, "new_value": 1}],
+        )
+        refreshed = _request_row(request_id)
+        return jsonify({"message": "Vacation archived.", "request": serialize_request(refreshed)})
+
     @app.get("/api/requests/<int:request_id>")
     @login_required
     def api_request_detail(request_id: int):
@@ -1366,12 +1671,15 @@ def register_routes(app):
         start_date = request.form.get("start_date", "").strip()
         end_date = request.form.get("end_date", "").strip()
         note = request.form.get("request_note", "").strip()
+        target_user = query_db("SELECT * FROM users WHERE id = ?", (target_user_id,), one=True)
+        spring_break_error = _validate_spring_break_request(target_user_id, target_user["full_name"], start_date, end_date)
+        if spring_break_error:
+            return jsonify({"error": spring_break_error}), 400
         try:
             request_plan = _build_request_segments(target_user_id, start_date, end_date)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        target_user = query_db("SELECT * FROM users WHERE id = ?", (target_user_id,), one=True)
         created_rows = []
         for segment in request_plan["segments"]:
             request_id = execute_db(
@@ -1508,6 +1816,14 @@ def register_routes(app):
 
         action = parsed["action"]
         if action == "create":
+            spring_break_error = _validate_spring_break_request(
+                parsed["physicianId"],
+                parsed["physicianName"],
+                parsed["startDate"],
+                parsed["endDate"],
+            )
+            if spring_break_error:
+                return jsonify({"error": spring_break_error, "parsed": parsed}), 400
             try:
                 request_plan = _build_request_segments(parsed["physicianId"], parsed["startDate"], parsed["endDate"])
             except ValueError as exc:
@@ -1599,6 +1915,15 @@ def register_routes(app):
             target_user_id = parsed["physicianId"] or request_row["user_id"]
             if not can_manage_physician(actor, target_user_id):
                 return jsonify({"error": "You cannot move that vacation entry to the selected physician.", "parsed": parsed}), 403
+            target_user = query_db("SELECT * FROM users WHERE id = ?", (target_user_id,), one=True)
+            spring_break_error = _validate_spring_break_request(
+                target_user_id,
+                target_user["full_name"],
+                parsed["startDate"],
+                parsed["endDate"],
+            )
+            if spring_break_error:
+                return jsonify({"error": spring_break_error, "parsed": parsed}), 400
             try:
                 resolution = _resolve_request_status(target_user_id, parsed["startDate"], parsed["endDate"], exclude_request_id=request_row["id"])
             except ValueError as exc:
@@ -1622,7 +1947,6 @@ def register_routes(app):
                 )
                 return jsonify({"error": message, "parsed": parsed}), 400
 
-            target_user = query_db("SELECT * FROM users WHERE id = ?", (target_user_id,), one=True)
             db = get_db()
             db.execute(
                 """
@@ -1752,12 +2076,15 @@ def register_routes(app):
         start_date = request.form.get("start_date", "").strip()
         end_date = request.form.get("end_date", "").strip()
         note = request.form.get("request_note", "").strip()
+        target_user = query_db("SELECT * FROM users WHERE id = ?", (target_user_id,), one=True)
+        spring_break_error = _validate_spring_break_request(target_user_id, target_user["full_name"], start_date, end_date)
+        if spring_break_error:
+            return jsonify({"error": spring_break_error}), 400
         try:
             resolution = _resolve_request_status(target_user_id, start_date, end_date, exclude_request_id=request_id)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        target_user = query_db("SELECT * FROM users WHERE id = ?", (target_user_id,), one=True)
         db = get_db()
         db.execute(
             """
@@ -1993,6 +2320,50 @@ def register_routes(app):
         )
         return jsonify({"ok": True, "message": "Settings updated."})
 
+    @app.post("/api/settings/profile")
+    @login_required
+    def api_settings_profile():
+        user = current_user()
+        full_name = request.form.get("full_name", "").strip()
+        username = request.form.get("username", "").strip()
+        email = request.form.get("email", "").strip()
+        if not all([full_name, username, email]):
+            return jsonify({"error": "Full name, username, and email are required."}), 400
+
+        db = get_db()
+        try:
+            db.execute(
+                """
+                UPDATE users
+                SET full_name = ?, username = ?, email = ?
+                WHERE id = ?
+                """,
+                (full_name, username, email, user["id"]),
+            )
+            db.execute("UPDATE vacation_requests SET request_display_name = ? WHERE user_id = ?", (full_name, user["id"]))
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            return jsonify({"error": f"Unable to update profile: {exc}"}), 400
+
+        changes = []
+        for field_name, old_value, new_value in [
+            ("full_name", user["full_name"], full_name),
+            ("username", user["username"], username),
+            ("email", user["email"], email),
+        ]:
+            if old_value != new_value:
+                changes.append({"field_name": field_name, "old_value": old_value, "new_value": new_value})
+        record_activity(
+            user["id"],
+            "profile-updated",
+            f"{full_name} updated their profile.",
+            "user",
+            user["id"],
+            changes=changes,
+        )
+        return jsonify({"ok": True, "message": "Profile updated."})
+
     @app.post("/api/settings/password")
     @login_required
     def api_settings_password():
@@ -2032,7 +2403,7 @@ def register_routes(app):
         if delegate_user_id == actor["id"]:
             return jsonify({"error": "You cannot delegate to yourself."}), 400
         delegate = query_db(
-            "SELECT * FROM users WHERE id = ? AND role = 'physician' AND is_active = 1 AND deleted_at IS NULL",
+            "SELECT * FROM users WHERE id = ? AND role IN ('physician', 'per_diem') AND is_active = 1 AND deleted_at IS NULL",
             (delegate_user_id,),
             one=True,
         )
@@ -2090,7 +2461,7 @@ def register_routes(app):
             selected_year = _default_selected_year(years)
         actor = current_user()
         user_holidays = []
-        if actor and actor["role"] == "physician":
+        if actor and actor["role"] in PHYSICIAN_ROLES:
             user_holidays = [
                 {"holidayKey": row["holiday_key"], "holidayTitle": row["holiday_title"], "category": row["category"]}
                 for row in _trade_candidate_holidays(actor["id"], selected_year)
@@ -2110,7 +2481,7 @@ def register_routes(app):
         if not assignment:
             abort(404)
         user_row = query_db(
-            "SELECT id, full_name FROM users WHERE id = ? AND role = 'physician' AND deleted_at IS NULL",
+            "SELECT id, full_name FROM users WHERE id = ? AND role IN ('physician', 'per_diem') AND deleted_at IS NULL",
             (new_user_id,),
             one=True,
         )
@@ -2367,7 +2738,7 @@ def register_routes(app):
         confirm_password = request.form.get("confirm_password", "").strip()
         role = request.form.get("role", "physician").strip()
         provisioning_mode = request.form.get("provisioning_mode", "reset_link").strip() or "reset_link"
-        if not all([full_name, username, email]) or role not in {"physician", "admin"}:
+        if not all([full_name, username, email]) or role not in USER_ROLES:
             return jsonify({"error": "Full name, username, email, and role are required."}), 400
         if provisioning_mode not in {"reset_link", "manual_password", "random_password"}:
             return jsonify({"error": "Choose how the new user should set their password."}), 400
@@ -2488,33 +2859,25 @@ def register_routes(app):
         username = request.form.get("username", "").strip()
         email = request.form.get("email", "").strip()
         role = request.form.get("role", "").strip()
-        password = request.form.get("password", "").strip()
-        confirm_password = request.form.get("confirm_password", "").strip()
-        if not all([full_name, username, email]) or role not in {"physician", "admin"}:
+        is_active_raw = request.form.get("is_active", "1").strip()
+        if not all([full_name, username, email]) or role not in USER_ROLES:
             return jsonify({"error": "Full name, username, email, and role are required."}), 400
-        if password and password != confirm_password:
-            return jsonify({"error": "Passwords do not match."}), 400
+        if is_active_raw not in {"0", "1"}:
+            return jsonify({"error": "Status must be Active or Inactive."}), 400
+        is_active = int(is_active_raw)
+        if admin_user["id"] == user_id and not is_active:
+            return jsonify({"error": "You cannot set the currently logged-in admin to inactive."}), 400
 
         db = get_db()
         try:
-            if password:
-                db.execute(
-                    """
-                    UPDATE users
-                    SET full_name = ?, username = ?, email = ?, role = ?, annual_day_limit = 0, password_hash = ?
-                    WHERE id = ?
-                    """,
-                    (full_name, username, email, role, hash_password(password), user_id),
-                )
-            else:
-                db.execute(
-                    """
-                    UPDATE users
-                    SET full_name = ?, username = ?, email = ?, role = ?, annual_day_limit = 0
-                    WHERE id = ?
-                    """,
-                    (full_name, username, email, role, user_id),
-                )
+            db.execute(
+                """
+                UPDATE users
+                SET full_name = ?, username = ?, email = ?, role = ?, is_active = ?, annual_day_limit = 0
+                WHERE id = ?
+                """,
+                (full_name, username, email, role, is_active, user_id),
+            )
             db.execute("UPDATE vacation_requests SET request_display_name = ? WHERE user_id = ?", (full_name, user_id))
             db.commit()
         except Exception as exc:
@@ -2527,13 +2890,12 @@ def register_routes(app):
             ("username", user["username"], username),
             ("email", user["email"], email),
             ("role", user["role"], role),
+            ("is_active", user["is_active"], is_active),
         ]:
             if old_value != new_value:
                 changes.append({"field_name": field_name, "old_value": old_value, "new_value": new_value})
         if user["annual_day_limit"] != 0:
             changes.append({"field_name": "annual_day_limit", "old_value": user["annual_day_limit"], "new_value": 0})
-        if password:
-            changes.append({"field_name": "password_hash", "old_value": "<redacted>", "new_value": "<updated>"})
         record_activity(
             admin_user["id"],
             "user-updated",
@@ -2543,6 +2905,30 @@ def register_routes(app):
             changes=changes,
         )
         return jsonify({"ok": True, "message": f"Updated {full_name}."})
+
+    @app.post("/api/admin/users/<int:user_id>/reset-password")
+    @admin_required
+    def api_admin_reset_user_password(user_id: int):
+        admin_user = current_user()
+        user = query_db("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL", (user_id,), one=True)
+        if not user:
+            abort(404)
+        password = request.form.get("password", "").strip()
+        confirm_password = request.form.get("confirm_password", "").strip()
+        if not password:
+            return jsonify({"error": "Password is required."}), 400
+        if password != confirm_password:
+            return jsonify({"error": "Passwords do not match."}), 400
+        execute_db("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(password), user_id))
+        record_activity(
+            admin_user["id"],
+            "user-password-reset",
+            f"{admin_user['full_name']} reset the password for {user['username']}.",
+            "user",
+            user_id,
+            changes=[{"field_name": "password_hash", "old_value": "<redacted>", "new_value": "<updated>"}],
+        )
+        return jsonify({"ok": True, "message": f"Password reset for {user['full_name']}."})
 
     @app.post("/api/admin/users/<int:user_id>/toggle")
     @admin_required

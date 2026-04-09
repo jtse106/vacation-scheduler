@@ -13,90 +13,87 @@
             <p class="subtle">Edit or cancel any vacation entry you are allowed to manage. Requests for full dates stay on the waitlist until space opens.</p>
           </div>
         </div>
-        <div id="historyList" class="history-list"></div>
-        <div class="page-header top-gap">
-          <div>
-            <h2>Waitlist</h2>
-            <p class="subtle">These requests are queued in order and are promoted automatically when space opens.</p>
+        <div class="history-top-controls">
+          <div class="history-view-toggle" role="tablist" aria-label="Vacation history sections">
+            <button class="history-view-button active" type="button" role="tab" aria-selected="true" data-history-view="active">
+              New requests
+              <span class="history-view-count" id="historyActiveCount">0</span>
+            </button>
+            <button class="history-view-button" type="button" role="tab" aria-selected="false" data-history-view="archived">
+              Archived
+              <span class="history-view-count" id="historyArchivedCount">0</span>
+            </button>
           </div>
+          {% if nav_user and nav_user.role == 'admin' %}
+            <div class="history-admin-toolbar">
+              <div class="history-filter-shell">
+                <button class="secondary-button history-filter-button" type="button" data-open-history-filters aria-expanded="false" aria-controls="historyFilterPopover">
+                  Filter
+                  <span class="history-filter-badge hidden" id="historyFilterCount">0</span>
+                </button>
+                <div class="history-filter-popover hidden" id="historyFilterPopover" aria-hidden="true" hidden>
+                  <form id="historyFilterForm" class="stack compact-form">
+                    <div class="history-filter-group">
+                      <h3>Timeframe</h3>
+                      <div class="form-grid history-filter-grid">
+                        <label>
+                          <span>Start date</span>
+                          <input type="date" name="start_date" />
+                        </label>
+                        <label>
+                          <span>End date</span>
+                          <input type="date" name="end_date" />
+                        </label>
+                      </div>
+                    </div>
+                    <div class="history-filter-group">
+                      <h3>Physician</h3>
+                      <label>
+                        <span>Show requests for</span>
+                        <select name="physician_id" id="historyFilterPhysician">
+                          <option value="">All physicians</option>
+                          {% for physician in nav_managed_physicians %}
+                            <option value="{{ physician.id }}">{{ physician.fullName }}</option>
+                          {% endfor %}
+                        </select>
+                      </label>
+                    </div>
+                    <div class="inline-actions history-filter-actions">
+                      <button class="secondary-button" type="button" data-reset-history-filters>Reset</button>
+                      <button class="primary-button" type="submit">Apply</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+              <label class="history-search-field" aria-label="Search requests">
+                <span class="history-search-icon" aria-hidden="true">⌕</span>
+                <input id="historySearchInput" type="search" placeholder="Search requests" autocomplete="off" />
+              </label>
+            </div>
+          {% endif %}
         </div>
-        <div id="waitlistList" class="history-list"></div>
+
+        <section class="history-view-panel" data-history-panel="active">
+          <div id="historyList" class="history-list compact-list"></div>
+          <div class="page-header top-gap history-subsection-header">
+            <div>
+              <h2>Waitlist</h2>
+              <p class="subtle">These requests are queued in order and are promoted automatically when space opens.</p>
+            </div>
+          </div>
+          <div id="waitlistList" class="history-list compact-list"></div>
+        </section>
+
+        <section class="history-view-panel" data-history-panel="archived" hidden>
+          <div class="page-header history-subsection-header">
+            <div>
+              <h2>Archived requests</h2>
+              <p class="subtle">Older entries stay here in reverse chronological order so the active request view stays manageable.</p>
+            </div>
+          </div>
+          <div id="archivedHistoryList" class="history-list compact-list"></div>
+        </section>
       </section>
-
-      <div class="two-column-grid">
-        <section id="delegationSection" class="card page-panel">
-          <div class="page-header">
-            <div>
-              <span class="page-kicker">Delegation</span>
-              <h2>Authorized delegates</h2>
-              <p class="subtle">Grant another physician permission to update your schedule.</p>
-            </div>
-          </div>
-          <form id="delegationForm" class="stack compact-form form-grid">
-            <label>
-              <span>Delegate physician</span>
-              <select name="delegate_user_id" id="delegationSelect">
-                <option value="">Select a physician</option>
-              </select>
-            </label>
-            <button class="primary-button" type="submit">Add delegate</button>
-          </form>
-          <div class="stack">
-            <div>
-              <h3>Your delegates</h3>
-              <div id="ownedDelegations" class="history-list compact-list"></div>
-            </div>
-            <div>
-              <h3>Schedules you can manage</h3>
-              <div id="incomingDelegations" class="history-list compact-list"></div>
-            </div>
-          </div>
-        </section>
-
-        <section id="tradeSection" class="card page-panel">
-          <div class="page-header">
-            <div>
-              <span class="page-kicker">Holiday Trades</span>
-              <h2>Offer or respond to trades</h2>
-              <p class="subtle">Major holidays trade with major holidays. Minor holidays trade with minor holidays. Pending offers can be canceled by the sending physician.</p>
-            </div>
-          </div>
-          <form id="tradeForm" class="stack compact-form form-grid">
-            <label>
-              <span>Year</span>
-              <select name="year" id="tradeYearSelect">
-                {% for year in rotation_years %}
-                  <option value="{{ year }}" {% if year == current_year %}selected{% endif %}>{{ year }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <label>
-              <span>Your holiday</span>
-              <select name="offered_holiday_key" id="myHolidaySelect">
-                <option value="">Select your holiday</option>
-              </select>
-            </label>
-            <label>
-              <span>Trade with</span>
-              <select name="offered_to_user_id" id="tradeTargetUserSelect">
-                <option value="">Select physician</option>
-              </select>
-            </label>
-            <label>
-              <span>Their holiday</span>
-              <select name="requested_holiday_key" id="tradeTargetHolidaySelect">
-                <option value="">Select requested holiday</option>
-              </select>
-            </label>
-            <label>
-              <span>Note</span>
-              <textarea name="note" rows="3" placeholder="Optional context for the trade"></textarea>
-            </label>
-            <button class="primary-button" type="submit">Send trade offer</button>
-          </form>
-          <div id="tradeList" class="history-list compact-list"></div>
-        </section>
-      </div>
     </div>
   </section>
 </main>

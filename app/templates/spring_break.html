@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell stack">
+      {% include "_page_utility_bar.html" %}
+      <section class="card page-panel subpage-hero-panel">
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">Spring Break</span>
+            <h1>Spring Break Guidelines</h1>
+            <p class="subtle">Spring Break is defined as the last week of March through the first 2 weeks of April. To allow for increased availability of requests during Spring Break weeks, physicians who have Spring Break off for the current year must wait until November 1 of the calendar year before requesting Spring Break for the following year.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <h2>Spring Break Physicians</h2>
+            <p class="subtle">Review which physicians had Spring Break vacation scheduled for each year.</p>
+          </div>
+        </div>
+        <div class="year-toggle-row">
+          {% for year in spring_break_years %}
+            <a class="secondary-button year-toggle-button {% if year == selected_year %}active{% endif %}" href="{{ url_for('spring_break', year=year) }}">
+              <span>{{ year }}</span>
+              <span class="year-toggle-count">{{ spring_break_year_counts.get(year, 0) }}</span>
+            </a>
+          {% endfor %}
+        </div>
+        {% if spring_break_physicians %}
+          <div class="table-list top-gap spring-break-table-wrap">
+            <table class="spring-break-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Requested Days Off</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for physician in spring_break_physicians %}
+                  <tr>
+                    <td><strong>{{ physician.fullName }}</strong></td>
+                    <td>{{ physician.ranges | join(', ') }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="empty-state top-gap">No Spring Break vacation requests were found for {{ selected_year }}.</div>
+        {% endif %}
+      </section>
+    </div>
+  </section>
+</main>
+{% endblock %}

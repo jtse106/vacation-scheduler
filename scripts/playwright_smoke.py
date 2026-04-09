@@ -330,26 +330,36 @@ def main():
                     "() => ({ scrollHeight: document.documentElement.scrollHeight, innerHeight: window.innerHeight })"
                 )
                 assert home_fit["scrollHeight"] <= home_fit["innerHeight"] + 8, home_fit
-                layout_match = page.evaluate(
-                    """
-                    () => {
-                      const sidebar = document.querySelector('.sidebar')?.getBoundingClientRect();
-                      const calendar = document.querySelector('.calendar-shell')?.getBoundingClientRect();
-                      return {
-                        sidebarBottom: sidebar?.bottom ?? 0,
-                        calendarBottom: calendar?.bottom ?? 0,
-                      };
-                    }
-                    """
-                )
-                assert abs(layout_match["sidebarBottom"] - layout_match["calendarBottom"]) <= 12, layout_match
                 page.locator("#nextMonth").click()
                 expect(page.locator(".day-cell.is-holiday", has_text="Memorial Day").first).to_be_visible()
                 expect(page.locator(".day-cell.is-holiday", has_text="Memorial Day").first.locator(".slot-pill")).to_have_count(0)
+                navigate_mini_to(page, 2026, 4)
+                spring_break_cell = page.locator('[data-day="2026-04-07"]')
+                expect(spring_break_cell).to_have_class(re.compile(r"\bis-spring-break\b"))
+                expect(spring_break_cell.locator(".spring-break-pill")).to_have_text("Spring Break")
+                expect(spring_break_cell.locator(".slot-pill")).to_have_count(6)
                 page.goto(f"{BASE_URL}/instructions")
                 page.wait_for_selector(".screenshot-grid")
                 page.goto(f"{BASE_URL}/")
                 page.wait_for_selector("#calendarMount .day-cell")
+                home_layout = page.evaluate(
+                    """
+                    () => {
+                      const todayButton = document.querySelector('#todayButton')?.getBoundingClientRect();
+                      const prevMonth = document.querySelector('#prevMonth')?.getBoundingClientRect();
+                      const nextMonth = document.querySelector('#nextMonth')?.getBoundingClientRect();
+                      const firstLink = document.querySelector('.sidebar-links a, .sidebar-links button')?.getBoundingClientRect();
+                      const lastLink = document.querySelector('.sidebar-links a:last-of-type, .sidebar-links button:last-of-type')?.getBoundingClientRect();
+                      return {
+                        todayBetweenMonthArrows: Boolean(todayButton && prevMonth && nextMonth && todayButton.left >= prevMonth.right - 1 && todayButton.right <= nextMonth.left + 1),
+                        firstLinkHeight: firstLink?.height ?? 0,
+                        lastLinkHeight: lastLink?.height ?? 0,
+                      };
+                    }
+                    """
+                )
+                assert home_layout["todayBetweenMonthArrows"], home_layout
+                assert abs(home_layout["firstLinkHeight"] - home_layout["lastLinkHeight"]) <= 1.5, home_layout
                 page.screenshot(path=str(SCREENSHOT_DIR / "home.png"), full_page=True)
                 page.set_viewport_size({"width": 1440, "height": 960})
 
@@ -556,15 +566,26 @@ def main():
                 expect(page.locator("#settingsButton svg")).to_be_visible()
                 expect(page.locator(".sidebar-links").get_by_role("link", name="Authorized Delegates")).to_be_visible()
                 expect(page.locator(".sidebar-links").get_by_role("link", name="Holiday Trades")).to_be_visible()
-                expect(page.locator(".sidebar-links").get_by_role("button", name="Settings")).to_be_visible()
-                page.locator(".sidebar-links").get_by_role("button", name="Settings").click()
-                page.wait_for_selector("#settingsPanel:not(.hidden)")
-                page.locator('#settingsPanel [data-close-modal="settingsPanel"]').click()
+                logged_in_home_layout = page.evaluate(
+                    """
+                    () => {
+                      const schedule = document.querySelector('#openRequestModalInline')?.getBoundingClientRect();
+                      const miniCalendar = document.querySelector('.mini-calendar')?.getBoundingClientRect();
+                      const sidebarLinks = document.querySelector('.sidebar-links')?.getBoundingClientRect();
+                      return {
+                        scheduleBelowMini: Boolean(schedule && miniCalendar && schedule.top >= miniCalendar.bottom - 1),
+                        linksBelowSchedule: Boolean(schedule && sidebarLinks && sidebarLinks.top >= schedule.bottom - 1),
+                      };
+                    }
+                    """
+                )
+                assert logged_in_home_layout["scheduleBelowMini"], logged_in_home_layout
+                assert logged_in_home_layout["linksBelowSchedule"], logged_in_home_layout
                 page.locator(".sidebar-links").get_by_role("link", name="Authorized Delegates").click()
-                page.wait_for_url(re.compile(r"/history#delegationSection$"))
+                page.wait_for_url(re.compile(r"/authorized-delegates$"))
                 page.goto(f"{BASE_URL}/")
                 page.locator(".sidebar-links").get_by_role("link", name="Holiday Trades").click()
-                page.wait_for_url(re.compile(r"/history#tradeSection$"))
+                page.wait_for_url(re.compile(r"/holiday-trades$"))
                 page.goto(f"{BASE_URL}/")
                 page.locator("#settingsButton").click()
                 page.wait_for_selector("#settingsPanel:not(.hidden)")
@@ -967,8 +988,7 @@ def main():
                 expect(page.locator("#tradeNoticeMount")).to_be_visible()
                 expect(page.locator("#tradeNoticeMount")).to_contain_text("holiday trade request")
                 page.locator("#tradeNoticeMount a").click()
-                page.wait_for_url(re.compile(r"/history#tradeSection$"))
-                page.goto(f"{BASE_URL}/history")
+                page.wait_for_url(re.compile(r"/holiday-trades$"))
                 accept_offer_row = page.locator(".trade-row", has_text="Accept this offer")
                 accept_offer_row.get_by_role("button", name="Accept").click()
                 wait_for_toast(page, "Trade accepted.")

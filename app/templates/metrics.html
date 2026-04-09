@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell stack">
+      {% include "_page_utility_bar.html" %}
+      <section class="card page-panel subpage-hero-panel">
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">Metrics</span>
+            <h1>Vacation Metrics</h1>
+            <p class="subtle">{% if nav_user and nav_user.role == 'admin' %}Compare requested vacation days across physicians and years.{% else %}Review your requested vacation days by year and compare against prior years.{% endif %}</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <h2>Year Focus</h2>
+            <p class="subtle">Choose a year to highlight in the chart while keeping the year-over-year comparison table below.</p>
+          </div>
+        </div>
+        <div class="year-toggle-row">
+          {% for year in metric_years %}
+            {% if nav_user and nav_user.role == 'admin' %}
+              {% set query = '?year=' ~ year %}
+              {% for physician_id in selected_metric_physician_ids %}
+                {% set query = query ~ '&physician_id=' ~ physician_id %}
+              {% endfor %}
+              <a class="secondary-button year-toggle-button {% if year == selected_year %}active{% endif %}" href="{{ url_for('metrics') ~ query }}">{{ year }}</a>
+            {% else %}
+              <a class="secondary-button year-toggle-button {% if year == selected_year %}active{% endif %}" href="{{ url_for('metrics', year=year) }}">{{ year }}</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </section>
+
+      {% if nav_user and nav_user.role == 'admin' %}
+        <section class="card page-panel">
+          <div class="page-header">
+            <div>
+              <h2>Physician Comparison</h2>
+              <p class="subtle">Select one or more physicians to compare requested vacation totals.</p>
+            </div>
+          </div>
+          <form class="stack compact-form" method="get" action="{{ url_for('metrics') }}">
+            <input type="hidden" name="year" value="{{ selected_year }}" />
+            <div class="metrics-physician-grid">
+              {% for physician in metric_physicians %}
+                <label class="metrics-physician-option">
+                  <input type="checkbox" name="physician_id" value="{{ physician.id }}" {% if physician.id in selected_metric_physician_ids %}checked{% endif %} />
+                  <span>{{ physician.full_name }}</span>
+                </label>
+              {% endfor %}
+            </div>
+            <div class="inline-actions">
+              <button class="primary-button" type="submit">Update comparison</button>
+            </div>
+          </form>
+        </section>
+      {% endif %}
+
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <h2>{{ selected_year }} Requested Vacation Days</h2>
+            <p class="subtle">Numeric totals and bar graph for the selected year.</p>
+          </div>
+        </div>
+        <div class="metrics-chart">
+          {% for row in metric_chart_rows %}
+            <article class="metrics-bar-row">
+              <div class="metrics-bar-label">
+                <strong>{{ row.fullName }}</strong>
+                <span class="metrics-total-pill">{{ row.selectedYearTotal }} days</span>
+              </div>
+              <div class="metrics-bar-track">
+                <div class="metrics-bar metrics-bar-{{ row.barTone }}" style="width: {{ row.barPercent }}%;"></div>
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="card page-panel">
+        <div class="page-header">
+          <div>
+            <h2>Year-Over-Year Comparison</h2>
+            <p class="subtle">Compare requested vacation totals numerically across prior years.</p>
+          </div>
+        </div>
+        <div class="table-list metrics-table-wrap">
+          <table class="metrics-table">
+            <thead>
+              <tr>
+                <th>Physician</th>
+                {% for year in metric_years %}
+                  <th>{{ year }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in metric_comparison_rows %}
+                <tr>
+                  <td><strong>{{ row.fullName }}</strong></td>
+                  {% for total in row.totalsByYear %}
+                    <td>{{ total }}</td>
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+{% endblock %}

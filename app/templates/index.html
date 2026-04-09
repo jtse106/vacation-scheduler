@@ -7,26 +7,15 @@
     <section class="calendar-shell card">
       <div class="calendar-utility-bar">
         <div class="calendar-branding">
-          <h1>South Bay ED VL Schedule</h1>
+          <h1>South Bay ED Vacation Schedule</h1>
         </div>
         <div class="hero-actions">
-          <button id="openRequestModalInline" class="primary-button" type="button">Schedule</button>
-          <button id="todayButton" class="secondary-button" type="button">Today</button>
           {% if nav_user %}
             <button id="settingsButton" class="secondary-button icon-label-button" type="button" data-open-settings="appearance" aria-label="Settings">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="12" r="3.2"></circle>
-                <path d="M19.4 15a1.75 1.75 0 0 0 .35 1.93l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.75 1.75 0 0 0-1.93-.35 1.75 1.75 0 0 0-1.03 1.6V21a2 2 0 1 1-4 0v-.09a1.75 1.75 0 0 0-1.15-1.64 1.75 1.75 0 0 0-1.81.39l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.75 1.75 0 0 0 .35-1.93 1.75 1.75 0 0 0-1.6-1.03H3a2 2 0 1 1 0-4h.09a1.75 1.75 0 0 0 1.64-1.15 1.75 1.75 0 0 0-.39-1.81l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.75 1.75 0 0 0 1.93.35h.08A1.75 1.75 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.75 1.75 0 0 0 1.15 1.64 1.75 1.75 0 0 0 1.81-.39l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.75 1.75 0 0 0-.35 1.93v.08A1.75 1.75 0 0 0 20.91 10H21a2 2 0 1 1 0 4h-.09a1.75 1.75 0 0 0-1.51 1Z"></path>
-              </svg>
+              <img class="settings-icon" src="{{ url_for('static', filename='icons/gear.png') }}" alt="" aria-hidden="true" />
               <span class="sr-only">Settings</span>
             </button>
-            <a class="user-chip" href="{{ url_for('history') }}">
-              <span class="avatar">{{ nav_user.full_name[0] }}</span>
-              <span>{{ nav_user.username }}</span>
-            </a>
-            <form method="post" action="{{ url_for('logout') }}">
-              <button class="text-button" type="submit">Log out</button>
-            </form>
+            {% include "_account_menu.html" %}
           {% else %}
             <a class="user-chip" href="{{ url_for('login') }}">
               <span class="avatar">?</span>
@@ -38,10 +27,10 @@
       <div class="calendar-header">
         <div class="calendar-heading-row calendar-title-wrap">
           <h1 id="calendarTitle">{{ month_name }} {{ current_year }}</h1>
-          <p class="subtle">{% if nav_user and nav_user.role == 'physician' %}Click or drag across days to select your range.{% else %}Tap a day to see physicians already scheduled off.{% endif %}</p>
+          <p class="subtle">{% if nav_user and nav_user.role in ['physician', 'per_diem'] %}Click or drag across days to select your range.{% else %}Tap a day to see physicians already scheduled off.{% endif %}</p>
         </div>
         <div class="calendar-header-tools">
-          {% if nav_user and nav_user.role == 'physician' %}
+          {% if nav_user and nav_user.role in ['physician', 'per_diem'] %}
             <div id="selectionToolbar" class="selection-toolbar hidden" aria-hidden="true">
               <div class="selection-toolbar-copy">
                 <strong id="selectionLabel">No dates selected</strong>
@@ -53,8 +42,13 @@
             </div>
           {% endif %}
           <div class="calendar-nav">
-            <button id="prevMonth" class="icon-button" type="button"><</button>
-            <button id="nextMonth" class="icon-button" type="button">></button>
+            <button id="prevMonth" class="icon-button" type="button" aria-label="Previous month">
+              <img class="mini-nav-icon" src="{{ url_for('static', filename='icons/chevron-left.png') }}" alt="" aria-hidden="true" />
+            </button>
+            <button id="todayButton" class="secondary-button calendar-today-button" type="button">Today</button>
+            <button id="nextMonth" class="icon-button" type="button" aria-label="Next month">
+              <img class="mini-nav-icon" src="{{ url_for('static', filename='icons/chevron-right.png') }}" alt="" aria-hidden="true" />
+            </button>
           </div>
         </div>
       </div>

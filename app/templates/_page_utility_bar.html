@@ -1,24 +1,14 @@
 <div class="calendar-utility-bar page-utility-bar">
   <div class="calendar-branding">
-    <h1><a href="{{ url_for('index') }}">South Bay ED VL Schedule</a></h1>
+    <h1><a href="{{ url_for('index') }}">South Bay ED Vacation Schedule</a></h1>
   </div>
   <div class="hero-actions">
     {% if nav_user %}
-      <button id="openRequestModal" class="primary-button" type="button">Schedule</button>
       <button id="settingsButton" class="secondary-button icon-label-button" type="button" data-open-settings="appearance" aria-label="Settings">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="12" r="3.2"></circle>
-          <path d="M19.4 15a1.75 1.75 0 0 0 .35 1.93l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.75 1.75 0 0 0-1.93-.35 1.75 1.75 0 0 0-1.03 1.6V21a2 2 0 1 1-4 0v-.09a1.75 1.75 0 0 0-1.15-1.64 1.75 1.75 0 0 0-1.81.39l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.75 1.75 0 0 0 .35-1.93 1.75 1.75 0 0 0-1.6-1.03H3a2 2 0 1 1 0-4h.09a1.75 1.75 0 0 0 1.64-1.15 1.75 1.75 0 0 0-.39-1.81l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.75 1.75 0 0 0 1.93.35h.08A1.75 1.75 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.75 1.75 0 0 0 1.15 1.64 1.75 1.75 0 0 0 1.81-.39l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.75 1.75 0 0 0-.35 1.93v.08A1.75 1.75 0 0 0 20.91 10H21a2 2 0 1 1 0 4h-.09a1.75 1.75 0 0 0-1.51 1Z"></path>
-        </svg>
+        <img class="settings-icon" src="{{ url_for('static', filename='icons/gear.png') }}" alt="" aria-hidden="true" />
         <span class="sr-only">Settings</span>
       </button>
-      <a class="user-chip" href="{{ url_for('history') }}">
-        <span class="avatar">{{ nav_user.full_name[0] }}</span>
-        <span>{{ nav_user.username }}</span>
-      </a>
-      <form method="post" action="{{ url_for('logout') }}">
-        <button class="text-button" type="submit">Log out</button>
-      </form>
+      {% include "_account_menu.html" %}
     {% else %}
       <a class="user-chip" href="{{ url_for('login') }}">
         <span class="avatar">?</span>

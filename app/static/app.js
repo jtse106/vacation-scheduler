@@ -18,6 +18,13 @@ const state = {
   rotationData: null,
   trades: [],
   historyRequests: [],
+  historyView: "active",
+  historyFilters: {
+    query: "",
+    startDate: "",
+    endDate: "",
+    physicianId: "",
+  },
   dayRequests: [],
   waitlistRequests: [],
   adminWaitlistRequests: [],
@@ -157,7 +164,7 @@ function renderPendingTradeNotice() {
   }
   mount.classList.remove("hidden");
   mount.dataset.tradeCount = String(notice.count);
-  mount.innerHTML = `<a href="${escapeHtml(appUrl(notice.href || "/history#tradeSection"))}">${escapeHtml(notice.message)}</a>`;
+  mount.innerHTML = `<a href="${escapeHtml(appUrl(notice.href || "/holiday-trades"))}">${escapeHtml(notice.message)}</a>`;
 }
 
 function showToast(message, type = "info") {
@@ -322,8 +329,142 @@ function formatDateRange(startDate, endDate) {
   return startDate === endDate ? startDate : `${startDate} to ${endDate}`;
 }
 
+function parseDateTimeValue(value) {
+  if (!value) return 0;
+  const normalized = value.includes("T") ? value : `${value}T00:00:00`;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+}
+
+function sortRequestsByLatest(requests, accessor) {
+  return [...requests].sort((left, right) => {
+    const delta = accessor(right) - accessor(left);
+    if (delta !== 0) return delta;
+    return (right.id || 0) - (left.id || 0);
+  });
+}
+
+function formatRequestStatusLabel(status) {
+  return String(status || "").replaceAll("_", " ");
+}
+
+function activeHistoryFilterCount() {
+  let count = 0;
+  if (state.historyFilters.query) count += 1;
+  if (state.historyFilters.startDate || state.historyFilters.endDate) count += 1;
+  if (state.historyFilters.physicianId) count += 1;
+  return count;
+}
+
+function syncHistoryFilterBadge() {
+  const badge = qs("#historyFilterCount");
+  if (!badge) return;
+  const count = activeHistoryFilterCount();
+  badge.textContent = String(count);
+  badge.classList.toggle("hidden", count === 0);
+}
+
+function setHistoryFilterPopover(isOpen) {
+  const popover = qs("#historyFilterPopover");
+  const button = qs("[data-open-history-filters]");
+  if (!popover || !button) return;
+  popover.hidden = !isOpen;
+  popover.classList.toggle("hidden", !isOpen);
+  popover.setAttribute("aria-hidden", String(!isOpen));
+  button.setAttribute("aria-expanded", String(isOpen));
+}
+
+function syncHistoryFilterForm() {
+  const form = qs("#historyFilterForm");
+  const searchInput = qs("#historySearchInput");
+  if (searchInput) searchInput.value = state.historyFilters.query;
+  if (!form) return;
+  form.elements.start_date.value = state.historyFilters.startDate;
+  form.elements.end_date.value = state.historyFilters.endDate;
+  form.elements.physician_id.value = state.historyFilters.physicianId;
+}
+
+function requestOverlapsWindow(item, startDate, endDate) {
+  if (startDate && item.endDate < startDate) return false;
+  if (endDate && item.startDate > endDate) return false;
+  return true;
+}
+
+function matchesHistoryQuery(item, query) {
+  if (!query) return true;
+  const haystack = [
+    item.physician,
+    item.createdBy,
+    item.note,
+    item.decisionNote,
+    item.startDate,
+    item.endDate,
+    item.status,
+    item.username,
+    item.email,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(query);
+}
+
+function filterHistoryRequests(requests) {
+  const query = state.historyFilters.query.trim().toLowerCase();
+  const startDate = state.historyFilters.startDate;
+  const endDate = state.historyFilters.endDate;
+  const physicianId = String(state.historyFilters.physicianId || "");
+  return requests.filter((item) => {
+    if (physicianId && String(item.physicianId) !== physicianId) return false;
+    if (!requestOverlapsWindow(item, startDate, endDate)) return false;
+    return matchesHistoryQuery(item, query);
+  });
+}
+
+function setHistoryView(view = "active") {
+  state.historyView = view === "archived" ? "archived" : "active";
+  qsa("[data-history-view]").forEach((button) => {
+    const isActive = button.dataset.historyView === state.historyView;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+  qsa("[data-history-panel]").forEach((panel) => {
+    const isActive = panel.dataset.historyPanel === state.historyView;
+    panel.hidden = !isActive;
+    panel.classList.toggle("active", isActive);
+  });
+}
+
+function roleLabel(role) {
+  if (role === "admin") return "Admin";
+  if (role === "per_diem") return "Per Diem";
+  return "Full-time Physician";
+}
+
+function syncAccountMenu() {
+  const user = state.session.currentUser;
+  if (!user) return;
+  qsa("[data-account-username]").forEach((node) => {
+    node.textContent = user.username;
+  });
+  qsa("[data-account-avatar]").forEach((node) => {
+    node.textContent = (user.fullName || user.username || "?").slice(0, 1).toUpperCase();
+  });
+}
+
+function openProfileModal() {
+  const user = state.session.currentUser;
+  const form = qs("#profileForm");
+  if (!user || !form) return;
+  form.elements.full_name.value = user.fullName || "";
+  form.elements.username.value = user.username || "";
+  form.elements.email.value = user.email || "";
+  form.elements.role_label.value = roleLabel(user.role);
+  openModal("profileModal");
+}
+
 function selectionEnabled() {
-  return state.session.currentUser?.role === "physician" && Boolean(qs("#selectionToolbar"));
+  return ["physician", "per_diem"].includes(state.session.currentUser?.role) && Boolean(qs("#selectionToolbar"));
 }
 
 function compareIsoDates(left, right) {
@@ -485,6 +626,7 @@ async function refreshSession() {
     state.showWeekNumbers = Boolean(state.session.currentUser.showWeekNumbers);
     applyTheme(state.session.currentUser.themeSkin || "slate");
   }
+  syncAccountMenu();
   if (!selectionEnabled()) {
     clearSelection();
   } else {
@@ -612,9 +754,13 @@ function renderCalendar(data) {
       if (!day.isCurrentMonth) classNames.push("other-month");
       if (day.isToday) classNames.push("today");
       if (day.isHoliday) classNames.push("is-holiday");
+      if (day.isSpringBreak) classNames.push("is-spring-break");
       if (day.waitlistCount) classNames.push("has-waitlist");
       if (selectedDates.has(day.date)) classNames.push("selected");
       const holidayBadge = day.isHoliday ? `<div class="holiday-pill">${escapeHtml(day.holiday.title)}</div>` : "";
+      const springBreakBadge = day.isSpringBreak
+        ? `<span class="spring-break-pill" aria-label="${escapeHtml(day.springBreak.title)}">${escapeHtml(day.springBreak.title)}</span>`
+        : "";
       const waitlistBadge = day.waitlistCount
         ? `<span class="waitlist-badge" data-waitlist-badge="${day.date}" data-waitlist-day="${day.date}" title="${day.waitlistCount} waitlisted request${day.waitlistCount === 1 ? "" : "s"}">W${day.waitlistCount}</span>`
         : "";
@@ -624,7 +770,10 @@ function renderCalendar(data) {
       body.push(`
         <button type="button" class="${classNames.join(" ")}" data-day="${day.date}" data-current-month="${day.isCurrentMonth}" data-holiday="${day.isHoliday}" data-waitlist-count="${day.waitlistCount || 0}">
           <div class="day-head">
-            <div class="day-number">${day.day}</div>
+            <div class="day-head-primary">
+              <div class="day-number">${day.day}</div>
+              ${springBreakBadge}
+            </div>
             ${waitlistBadge}
           </div>
           ${holidayBadge}
@@ -741,18 +890,25 @@ function renderRequestList(target, requests, options = {}) {
     return;
   }
   target.innerHTML = requests.map((item) => `
-    <article class="history-item ${item.status === "waitlisted" ? "waitlist-card" : ""}">
-      <div>
-        <strong>${escapeHtml(item.physician)}</strong>
-        <div class="subtle">${escapeHtml(formatDateRange(item.startDate, item.endDate))}</div>
-        <div class="subtle">Created by ${escapeHtml(item.createdBy)}</div>
-        ${item.note ? `<div class="subtle">${escapeHtml(item.note)}</div>` : ""}
-        ${item.decisionNote ? `<div class="subtle">${escapeHtml(item.decisionNote)}</div>` : ""}
+    <article class="history-item request-history-card ${item.status === "waitlisted" ? "waitlist-card" : ""} ${item.isArchived ? "is-archived" : ""}">
+      <div class="request-history-main">
+        <div class="request-history-summary">
+          <strong>${escapeHtml(item.physician)}</strong>
+          <span class="request-history-date">${escapeHtml(formatDateRange(item.startDate, item.endDate))}</span>
+          <span class="request-status-pill status ${escapeHtml(item.status)}">${escapeHtml(formatRequestStatusLabel(item.status))}</span>
+        </div>
+        <div class="request-history-meta">
+          <span>Created by ${escapeHtml(item.createdBy)}</span>
+          ${item.createdAt ? `<span>Logged ${escapeHtml(formatDateTime(item.createdAt))}</span>` : ""}
+          ${item.isArchived && item.updatedAt ? `<span>Archived ${escapeHtml(formatDateTime(item.updatedAt))}</span>` : ""}
+        </div>
+        ${item.note ? `<div class="subtle request-history-note">${escapeHtml(item.note)}</div>` : ""}
+        ${item.decisionNote ? `<div class="subtle request-history-note">${escapeHtml(item.decisionNote)}</div>` : ""}
       </div>
-      <div class="inline-actions">
-        <span class="status ${escapeHtml(item.status)}">${escapeHtml(item.status)}</span>
+      <div class="inline-actions request-history-actions">
         ${item.status !== "canceled" ? `<button class="secondary-button" type="button" data-edit-request="${item.id}">Edit</button>` : ""}
         ${item.status !== "canceled" ? `<button class="secondary-button" type="button" data-cancel-request="${item.id}">Cancel</button>` : ""}
+        ${options.showArchiveButton && !item.isArchived ? `<button class="secondary-button" type="button" data-archive-request="${item.id}">Archive</button>` : ""}
       </div>
     </article>
   `).join("");
@@ -760,19 +916,51 @@ function renderRequestList(target, requests, options = {}) {
 
 async function loadHistory() {
   const list = qs("#historyList");
+  const archivedList = qs("#archivedHistoryList");
   const waitlistList = qs("#waitlistList");
   const adminList = qs("#adminRequests");
   const adminWaitlist = qs("#adminWaitlist");
-  if (!list && !waitlistList && !adminList && !adminWaitlist) return;
+  if (!list && !archivedList && !waitlistList && !adminList && !adminWaitlist) return;
   const data = await fetchJson("/api/requests");
   state.historyRequests = data.requests;
-  state.waitlistRequests = data.requests.filter((item) => item.status === "waitlisted");
+  state.waitlistRequests = data.requests.filter((item) => item.status === "waitlisted" && !item.isArchived);
   state.adminWaitlistRequests = state.waitlistRequests;
-  const primaryRequests = data.requests.filter((item) => item.status !== "waitlisted");
-  renderRequestList(list, primaryRequests, { emptyText: "No vacation entries yet." });
-  renderRequestList(waitlistList, state.waitlistRequests, { emptyText: "No waitlisted requests." });
+  const allActiveRequests = sortRequestsByLatest(
+    data.requests.filter((item) => item.status !== "waitlisted" && !item.isArchived),
+    (item) => parseDateTimeValue(item.createdAt)
+  );
+  const allArchivedRequests = sortRequestsByLatest(
+    data.requests.filter((item) => item.isArchived),
+    (item) => parseDateTimeValue(item.updatedAt || item.createdAt)
+  );
+  const primaryRequests = sortRequestsByLatest(
+    data.requests.filter((item) => item.status !== "waitlisted"),
+    (item) => parseDateTimeValue(item.isArchived ? item.updatedAt || item.createdAt : item.createdAt)
+  );
+  const activeRequests = filterHistoryRequests(allActiveRequests);
+  const archivedRequests = filterHistoryRequests(allArchivedRequests);
+  const waitlistRequests = filterHistoryRequests(state.waitlistRequests);
+  renderRequestList(list, activeRequests, {
+    emptyText: "No new vacation requests.",
+    showArchiveButton: true,
+  });
+  renderRequestList(archivedList, archivedRequests, {
+    emptyText: "No archived requests yet.",
+    showArchiveButton: false,
+  });
+  renderRequestList(waitlistList, waitlistRequests, {
+    emptyText: "No waitlisted requests.",
+    showArchiveButton: true,
+  });
   renderRequestList(adminList, primaryRequests, { emptyText: "No scheduled or canceled requests." });
   renderRequestList(adminWaitlist, state.adminWaitlistRequests, { emptyText: "No waitlisted requests." });
+  const activeCount = qs("#historyActiveCount");
+  const archivedCount = qs("#historyArchivedCount");
+  if (activeCount) activeCount.textContent = String(activeRequests.length + waitlistRequests.length);
+  if (archivedCount) archivedCount.textContent = String(archivedRequests.length);
+  syncHistoryFilterBadge();
+  syncHistoryFilterForm();
+  setHistoryView(state.historyView);
 }
 
 function renderDelegations(data) {
@@ -910,7 +1098,7 @@ async function loadTrades() {
   state.session.pendingTradeNotice = pendingIncoming.length
     ? {
         count: pendingIncoming.length,
-        href: appUrl("/history#tradeSection"),
+        href: appUrl("/holiday-trades"),
         message: pendingIncoming.length === 1
           ? "1 holiday trade request needs your response."
           : `${pendingIncoming.length} holiday trade requests need your response.`,
@@ -948,7 +1136,7 @@ function openRequestModalForCreate() {
   qs('#requestForm input[name="request_id"]').value = "";
   qs("#assistantResponse").textContent = "";
   populatePhysicianSelects();
-  if (actor.role === "physician") {
+  if (["physician", "per_diem"].includes(actor.role)) {
     qs("#requestPhysicianSelect").value = String(actor.id);
     qs("#assistantPhysicianSelect").value = String(actor.id);
   }
@@ -992,7 +1180,8 @@ function renderUsers(users) {
   const currentUserId = state.session.currentUser?.id;
   const groups = [
     { role: "admin", title: "Admin accounts" },
-    { role: "physician", title: "Physician accounts" },
+    { role: "physician", title: "Full-time physicians" },
+    { role: "per_diem", title: "Per diem physicians" },
   ];
   list.innerHTML = groups.map((group) => {
     const groupUsers = users.filter((user) => user.role === group.role);
@@ -1003,13 +1192,16 @@ function renderUsers(users) {
         ${groupUsers.map((user) => `
           <article class="admin-user-row">
             <div class="admin-user-meta">
-              <strong>${escapeHtml(user.fullName)}${user.id === currentUserId ? " (you)" : ""}</strong>
-              <div class="subtle">@${escapeHtml(user.username)} - ${escapeHtml(user.email)}</div>
-              <div class="subtle">${escapeHtml(user.role)} account</div>
+              <div class="admin-user-heading">
+                <strong>${escapeHtml(user.fullName)}${user.id === currentUserId ? " (you)" : ""}</strong>
+                <span class="subtle admin-user-identity">@${escapeHtml(user.username)} - ${escapeHtml(user.email)}</span>
+                <span class="account-role-pill ${escapeHtml(user.role)}">${escapeHtml(user.roleLabel || user.role)}</span>
+              </div>
             </div>
             <div class="inline-actions">
-              <span class="status ${user.isActive ? "active" : "inactive"}">${user.isActive ? "active" : "inactive"}</span>
-              <button class="secondary-button" type="button" data-edit-user='${escapeHtml(JSON.stringify(user))}'>Edit / reset password</button>
+              <span class="admin-status-pill ${user.isActive ? "active" : "inactive"}">${user.isActive ? "Active" : "Inactive"}</span>
+              <button class="secondary-button" type="button" data-edit-user='${escapeHtml(JSON.stringify(user))}'>Edit</button>
+              <button class="secondary-button" type="button" data-reset-user-password='${escapeHtml(JSON.stringify(user))}'>Reset Password</button>
               <button class="secondary-button" type="button" data-toggle-user="${user.id}" ${user.id === currentUserId ? "disabled" : ""}>${user.isActive ? "Disable" : "Enable"}</button>
               <button class="secondary-button" type="button" data-delete-user="${user.id}" ${user.id === currentUserId ? "disabled" : ""}>Delete</button>
             </div>
@@ -1033,10 +1225,17 @@ function openUserModal(user) {
   qs('#userEditForm [name="username"]').value = user.username;
   qs('#userEditForm [name="email"]').value = user.email;
   qs('#userEditForm [name="role"]').value = user.role;
-  qs('#userEditForm [name="password"]').value = "";
-  qs('#userEditForm [name="confirm_password"]').value = "";
-  resetFormFeedback(qs("#userEditForm"));
+  qs('#userEditForm [name="is_active"]').value = user.isActive ? "1" : "0";
   openModal("userModal");
+}
+
+function openUserPasswordModal(user) {
+  qs("#userPasswordModalTitle").textContent = `Reset Password for ${user.fullName}`;
+  qs('#userPasswordForm [name="user_id"]').value = user.id;
+  qs('#userPasswordForm [name="password"]').value = "";
+  qs('#userPasswordForm [name="confirm_password"]').value = "";
+  resetFormFeedback(qs("#userPasswordForm"));
+  openModal("userPasswordModal");
 }
 
 function renderHolidays(holidays) {
@@ -1870,11 +2069,45 @@ function attachGlobalEvents() {
       await openRequestModalForEdit(editRequest.dataset.editRequest);
       return;
     }
+    const openProfile = event.target.closest("[data-open-profile]");
+    if (openProfile) {
+      openProfileModal();
+      return;
+    }
+    const historyViewButton = event.target.closest("[data-history-view]");
+    if (historyViewButton) {
+      setHistoryView(historyViewButton.dataset.historyView);
+      return;
+    }
+    const historyFilterButton = event.target.closest("[data-open-history-filters]");
+    if (historyFilterButton) {
+      const shouldOpen = historyFilterButton.getAttribute("aria-expanded") !== "true";
+      setHistoryFilterPopover(shouldOpen);
+      return;
+    }
+    const resetHistoryFilters = event.target.closest("[data-reset-history-filters]");
+    if (resetHistoryFilters) {
+      state.historyFilters.startDate = "";
+      state.historyFilters.endDate = "";
+      state.historyFilters.physicianId = "";
+      syncHistoryFilterForm();
+      setHistoryFilterPopover(false);
+      await loadHistory();
+      return;
+    }
     const cancelRequest = event.target.closest("[data-cancel-request]");
     if (cancelRequest) {
       const result = await fetchJson(`/api/requests/${cancelRequest.dataset.cancelRequest}/cancel`, { method: "POST" });
       showToast(result.message || "Vacation removed.", "success");
       await Promise.all([loadHistory(), loadCalendar()]);
+      return;
+    }
+    const archiveRequest = event.target.closest("[data-archive-request]");
+    if (archiveRequest) {
+      const result = await fetchJson(`/api/requests/${archiveRequest.dataset.archiveRequest}/archive`, { method: "POST" });
+      showToast(result.message || "Vacation archived.", "success");
+      setHistoryView("archived");
+      await loadHistory();
       return;
     }
     const removeRequestDay = event.target.closest("[data-remove-request-day]");
@@ -1910,6 +2143,11 @@ function attachGlobalEvents() {
     const editUser = event.target.closest("[data-edit-user]");
     if (editUser) {
       openUserModal(JSON.parse(editUser.dataset.editUser));
+      return;
+    }
+    const resetUserPassword = event.target.closest("[data-reset-user-password]");
+    if (resetUserPassword) {
+      openUserPasswordModal(JSON.parse(resetUserPassword.dataset.resetUserPassword));
       return;
     }
     const toggleUser = event.target.closest("[data-toggle-user]");
@@ -2022,6 +2260,27 @@ function attachGlobalEvents() {
   qs("#tradeYearSelect")?.addEventListener("change", async (event) => {
     await loadRotationData(event.currentTarget.value);
   });
+  qs("#profileForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const result = await fetchJson("/api/settings/profile", { method: "POST", body: new FormData(form) });
+    await refreshSession();
+    closeModal("profileModal");
+    showToast(result.message || "Profile updated.", "success");
+  });
+  qs("#historySearchInput")?.addEventListener("input", async (event) => {
+    state.historyFilters.query = event.currentTarget.value.trim();
+    await loadHistory();
+  });
+  qs("#historyFilterForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    state.historyFilters.startDate = form.elements.start_date.value;
+    state.historyFilters.endDate = form.elements.end_date.value;
+    state.historyFilters.physicianId = form.elements.physician_id.value;
+    setHistoryFilterPopover(false);
+    await loadHistory();
+  });
   qs("#myHolidaySelect")?.addEventListener("change", populateTradeHolidayOptions);
   qs("#tradeTargetUserSelect")?.addEventListener("change", populateTradeHolidayOptions);
 
@@ -2060,9 +2319,19 @@ function attachGlobalEvents() {
     const userId = form.querySelector('[name="user_id"]').value;
     const result = await fetchJson(`/api/admin/users/${userId}`, { method: "POST", body: new FormData(form) });
     closeModal("userModal");
-    resetFormFeedback(form);
     await Promise.all([loadAdminUsers(), refreshSession()]);
     showToast(result.message || "User updated.", "success");
+  });
+
+  qs("#userPasswordForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const userId = form.querySelector('[name="user_id"]').value;
+    const result = await fetchJson(`/api/admin/users/${userId}/reset-password`, { method: "POST", body: new FormData(form) });
+    closeModal("userPasswordModal");
+    resetFormFeedback(form);
+    await Promise.all([loadAdminUsers(), refreshSession()]);
+    showToast(result.message || "Password reset.", "success");
   });
 
   qs("#holidayCreateForm")?.addEventListener("submit", async (event) => {
@@ -2100,6 +2369,13 @@ function attachGlobalEvents() {
     const result = await fetchJson("/api/admin/trades/cancel-pending", { method: "POST" });
     await loadTrades();
     showToast(`Canceled ${result.canceledCount || 0} pending trade${result.canceledCount === 1 ? "" : "s"}.`, "success");
+  });
+
+  document.addEventListener("click", (event) => {
+    const popover = qs("#historyFilterPopover");
+    if (!popover || popover.classList.contains("hidden")) return;
+    if (event.target.closest(".history-filter-shell")) return;
+    setHistoryFilterPopover(false);
   });
 }
 

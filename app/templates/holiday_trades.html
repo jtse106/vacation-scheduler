@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="layout">
+  {% include "_sidebar.html" %}
+  <section class="content-pane">
+    <div class="page-shell stack">
+      {% include "_page_utility_bar.html" %}
+      <section class="card page-panel subpage-hero-panel">
+        <div class="page-header">
+          <div>
+            <span class="page-kicker">Holiday Trades</span>
+            <h1>Offer or respond to trades</h1>
+            <p class="subtle">Major holidays trade with major holidays. Minor holidays trade with minor holidays. Pending offers can be canceled by the sending physician.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card page-panel">
+        <form id="tradeForm" class="stack compact-form form-grid">
+          <label>
+            <span>Year</span>
+            <select name="year" id="tradeYearSelect">
+              {% for year in rotation_years %}
+                <option value="{{ year }}" {% if year == current_year %}selected{% endif %}>{{ year }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            <span>Your holiday</span>
+            <select name="offered_holiday_key" id="myHolidaySelect">
+              <option value="">Select your holiday</option>
+            </select>
+          </label>
+          <label>
+            <span>Trade with</span>
+            <select name="offered_to_user_id" id="tradeTargetUserSelect">
+              <option value="">Select physician</option>
+            </select>
+          </label>
+          <label>
+            <span>Their holiday</span>
+            <select name="requested_holiday_key" id="tradeTargetHolidaySelect">
+              <option value="">Select requested holiday</option>
+            </select>
+          </label>
+          <label>
+            <span>Note</span>
+            <textarea name="note" rows="3" placeholder="Optional context for the trade"></textarea>
+          </label>
+          <button class="primary-button" type="submit">Send trade offer</button>
+        </form>
+        <div id="tradeList" class="history-list compact-list"></div>
+      </section>
+    </div>
+  </section>
+</main>
+{% endblock %}
